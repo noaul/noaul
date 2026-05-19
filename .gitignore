@@ -1,0 +1,9 @@
+.noaul/
+*.log
+*.tmp
+*.bak
+*.bak.*
+node_modules/
+task_plan.md
+progress.md
+findings.md

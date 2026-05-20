@@ -97,6 +97,13 @@ Assert-True -Condition ($ids -notcontains 'windows-terminal') -Message 'Windows 
 $npmComponent = $catalog | Where-Object { $_.Id -eq 'npm' } | Select-Object -First 1
 Assert-True -Condition ($npmComponent.InstallMethod -eq 'virtual') -Message 'npm should be modeled as provided by Node.js, not installed independently'
 
+$ccSwitchComponent = $catalog | Where-Object { $_.Id -eq 'cc-switch' } | Select-Object -First 1
+Assert-True -Condition ($ccSwitchComponent.InstallMethod -eq 'winget') -Message 'CC Switch should keep winget as the Windows installer'
+Assert-True -Condition ($ccSwitchComponent.LinuxInstallMethod -eq 'cc-switch-cli') -Message 'CC Switch should use cc-switch-cli on Linux'
+Assert-True -Condition ($ccSwitchComponent.LinuxPackage -match 'saladday/cc-switch-cli') -Message 'Linux CC Switch should use saladday/cc-switch-cli'
+Invoke-NoaulInstallPlan -Plan @($ccSwitchComponent) -DryRun -Platform linux | Out-Null
+Invoke-NoaulUpdatePlan -Plan @($ccSwitchComponent) -DryRun -Platform linux | Out-Null
+
 $optionalIds = @($catalog | Where-Object { $_.Category -in @('AI CLI', 'Docker Service') -and $_.DefaultSelected } | ForEach-Object { $_.Id })
 Assert-True -Condition ($optionalIds.Count -eq 0) -Message 'AI CLIs and Docker services must not be selected by default'
 

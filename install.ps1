@@ -7,6 +7,7 @@ param(
     [switch] $Update,
     [switch] $ListComponents,
     [string] $InstallRoot,
+    [string] $Platform,
     [switch] $NoLogo
 )
 
@@ -48,6 +49,9 @@ $startArgs = @{
 
 if (-not [string]::IsNullOrWhiteSpace($InstallRoot)) {
     $startArgs.InstallRoot = $InstallRoot
+}
+if (-not [string]::IsNullOrWhiteSpace($Platform)) {
+    $startArgs.Platform = $Platform
 }
 
 Start-Noaul @startArgs

@@ -288,9 +288,11 @@ function Get-NoaulComponentCatalog {
             DefaultSelected = $false
             InstallMethod = 'winget'
             Package = 'farion1231.CC-Switch'
-            Command = ''
+            Command = 'cc-switch'
+            LinuxInstallMethod = 'cc-switch-cli'
+            LinuxPackage = 'https://github.com/saladday/cc-switch-cli/releases/latest/download/install.sh'
             Requires = @()
-            Description = 'Optional provider/config switcher for AI coding tools.'
+            Description = 'Optional provider/config switcher for AI coding tools. Windows uses CC Switch; Linux uses cc-switch-cli.'
         }
         [pscustomobject]@{
             Id = 'cpa'
@@ -359,6 +361,62 @@ function ConvertTo-NoaulComponentIds {
     }
 }
 
+function Get-NoaulCurrentPlatform {
+    if ($IsLinux) {
+        return 'linux'
+    }
+    if ($IsMacOS) {
+        return 'macos'
+    }
+
+    'windows'
+}
+
+function Get-NoaulComponentPropertyValue {
+    param(
+        [Parameter(Mandatory)][pscustomobject] $Component,
+        [Parameter(Mandatory)][string] $Name
+    )
+
+    if ($Component.PSObject.Properties.Name -contains $Name) {
+        return [string] $Component.$Name
+    }
+
+    ''
+}
+
+function Resolve-NoaulComponentInstallMethod {
+    param(
+        [Parameter(Mandatory)][pscustomobject] $Component,
+        [string] $Platform = (Get-NoaulCurrentPlatform)
+    )
+
+    if ($Platform -eq 'linux') {
+        $linuxMethod = Get-NoaulComponentPropertyValue -Component $Component -Name 'LinuxInstallMethod'
+        if (-not [string]::IsNullOrWhiteSpace($linuxMethod)) {
+            return $linuxMethod
+        }
+    }
+
+    [string] $Component.InstallMethod
+}
+
+function Resolve-NoaulComponentPackage {
+    param(
+        [Parameter(Mandatory)][pscustomobject] $Component,
+        [string] $Platform = (Get-NoaulCurrentPlatform)
+    )
+
+    if ($Platform -eq 'linux') {
+        $linuxPackage = Get-NoaulComponentPropertyValue -Component $Component -Name 'LinuxPackage'
+        if (-not [string]::IsNullOrWhiteSpace($linuxPackage)) {
+            return $linuxPackage
+        }
+    }
+
+    [string] $Component.Package
+}
+
 function New-NoaulInstallPlan {
     param(
         [string[]] $Components = @(),
@@ -410,6 +468,7 @@ function New-NoaulUpdatePlan {
     param(
         [string[]] $Components = @(),
         [string] $InstallRoot = (Get-NoaulDefaultInstallRoot),
+        [string] $Platform = (Get-NoaulCurrentPlatform),
         [AllowNull()]
         [string[]] $InstalledComponentIds = $null
     )
@@ -423,7 +482,7 @@ function New-NoaulUpdatePlan {
 
     $installed = @{}
     if ($null -eq $InstalledComponentIds) {
-        foreach ($componentId in @(Get-NoaulInstalledComponentIds -InstallRoot $InstallRoot)) {
+        foreach ($componentId in @(Get-NoaulInstalledComponentIds -InstallRoot $InstallRoot -Platform $Platform)) {
             $installed[$componentId.ToLowerInvariant()] = $true
         }
     }
@@ -918,10 +977,14 @@ function Test-NoaulDockerServiceInstalled {
 function Test-NoaulComponentInstalled {
     param(
         [Parameter(Mandatory)][pscustomobject] $Component,
-        [string] $InstallRoot = (Get-NoaulDefaultInstallRoot)
+        [string] $InstallRoot = (Get-NoaulDefaultInstallRoot),
+        [string] $Platform = (Get-NoaulCurrentPlatform)
     )
 
-    switch ($Component.InstallMethod) {
+    $installMethod = Resolve-NoaulComponentInstallMethod -Component $Component -Platform $Platform
+    $package = Resolve-NoaulComponentPackage -Component $Component -Platform $Platform
+
+    switch ($installMethod) {
         'detect' {
             return (Test-NoaulComponentCommand -Component $Component)
         }
@@ -929,16 +992,19 @@ function Test-NoaulComponentInstalled {
             return (Test-NoaulComponentCommand -Component $Component)
         }
         'scoop' {
-            return (Test-NoaulScoopPackageInstalled -Package ([string] $Component.Package))
+            return (Test-NoaulScoopPackageInstalled -Package $package)
         }
         'virtual' {
             return (Test-NoaulComponentCommand -Component $Component)
         }
         'winget' {
-            return (Test-NoaulWingetPackageInstalled -Package ([string] $Component.Package))
+            return (Test-NoaulWingetPackageInstalled -Package $package)
         }
         'npm' {
-            return (Test-NoaulNpmPackageInstalled -Package ([string] $Component.Package))
+            return (Test-NoaulNpmPackageInstalled -Package $package)
+        }
+        'cc-switch-cli' {
+            return (Test-NoaulComponentCommand -Component $Component)
         }
         'docker' {
             return (Test-NoaulDockerServiceInstalled -Id ([string] $Component.Id) -InstallRoot $InstallRoot)
@@ -950,10 +1016,13 @@ function Test-NoaulComponentInstalled {
 }
 
 function Get-NoaulInstalledComponentIds {
-    param([string] $InstallRoot = (Get-NoaulDefaultInstallRoot))
+    param(
+        [string] $InstallRoot = (Get-NoaulDefaultInstallRoot),
+        [string] $Platform = (Get-NoaulCurrentPlatform)
+    )
 
     foreach ($component in @(Get-NoaulComponentCatalog)) {
-        if (Test-NoaulComponentInstalled -Component $component -InstallRoot $InstallRoot) {
+        if (Test-NoaulComponentInstalled -Component $component -InstallRoot $InstallRoot -Platform $Platform) {
             $component.Id
         }
     }
@@ -1138,6 +1207,46 @@ function Install-NoaulNpmPackage {
     }
 }
 
+function Install-NoaulCcSwitchCli {
+    param(
+        [Parameter(Mandatory)][pscustomobject] $Component,
+        [string] $Platform = (Get-NoaulCurrentPlatform),
+        [switch] $DryRun
+    )
+
+    if ($Platform -ne 'linux') {
+        throw "cc-switch-cli is only supported on Linux by Noaul. Current platform: $Platform"
+    }
+
+    $url = Resolve-NoaulComponentPackage -Component $Component -Platform $Platform
+    if ($DryRun) {
+        Write-Host "[dry-run] install CC Switch CLI from $url with CC_SWITCH_FORCE=1"
+        return
+    }
+
+    foreach ($command in @('bash', 'curl')) {
+        if (-not (Test-NoaulCommand -Name $command)) {
+            throw "$command was not found. Install $command first, then rerun Noaul."
+        }
+    }
+
+    Invoke-NoaulCommand -Display "install CC Switch CLI from saladday/cc-switch-cli" -ScriptBlock {
+        $oldForce = $env:CC_SWITCH_FORCE
+        $env:CC_SWITCH_FORCE = '1'
+        try {
+            & bash -c "curl -fsSL $url | bash"
+        }
+        finally {
+            if ($null -eq $oldForce) {
+                Remove-Item Env:CC_SWITCH_FORCE -ErrorAction SilentlyContinue
+            }
+            else {
+                $env:CC_SWITCH_FORCE = $oldForce
+            }
+        }
+    }
+}
+
 function Update-NoaulScoop {
     param([switch] $DryRun)
 
@@ -1176,6 +1285,16 @@ function Update-NoaulNpmPackage {
     )
 
     Install-NoaulNpmPackage -Component $Component -DryRun:$DryRun
+}
+
+function Update-NoaulCcSwitchCli {
+    param(
+        [Parameter(Mandatory)][pscustomobject] $Component,
+        [string] $Platform = (Get-NoaulCurrentPlatform),
+        [switch] $DryRun
+    )
+
+    Install-NoaulCcSwitchCli -Component $Component -Platform $Platform -DryRun:$DryRun
 }
 
 function Start-NoaulDockerServices {
@@ -1282,12 +1401,14 @@ function Invoke-NoaulInstallPlan {
         [Parameter(Mandatory)]
         [pscustomobject[]] $Plan,
         [string] $InstallRoot = (Get-NoaulDefaultInstallRoot),
+        [string] $Platform = (Get-NoaulCurrentPlatform),
         [switch] $DryRun
     )
 
     $dockerServices = @()
     foreach ($component in @($Plan)) {
-        switch ($component.InstallMethod) {
+        $installMethod = Resolve-NoaulComponentInstallMethod -Component $component -Platform $Platform
+        switch ($installMethod) {
             'detect' {
                 Assert-NoaulDetectedTool -Component $component -DryRun:$DryRun
             }
@@ -1311,11 +1432,14 @@ function Invoke-NoaulInstallPlan {
                     Set-NoaulCodexDefaultReasoning -Effort 'xhigh' -DryRun:$DryRun
                 }
             }
+            'cc-switch-cli' {
+                Install-NoaulCcSwitchCli -Component $component -Platform $Platform -DryRun:$DryRun
+            }
             'docker' {
                 $dockerServices += $component.Id
             }
             default {
-                throw "Unsupported install method for $($component.Id): $($component.InstallMethod)"
+                throw "Unsupported install method for $($component.Id): $installMethod"
             }
         }
     }
@@ -1330,12 +1454,14 @@ function Invoke-NoaulUpdatePlan {
         [Parameter(Mandatory)]
         [pscustomobject[]] $Plan,
         [string] $InstallRoot = (Get-NoaulDefaultInstallRoot),
+        [string] $Platform = (Get-NoaulCurrentPlatform),
         [switch] $DryRun
     )
 
     $dockerServices = @()
     foreach ($component in @($Plan)) {
-        switch ($component.InstallMethod) {
+        $installMethod = Resolve-NoaulComponentInstallMethod -Component $component -Platform $Platform
+        switch ($installMethod) {
             'detect' {
                 Assert-NoaulDetectedTool -Component $component -DryRun:$DryRun
             }
@@ -1359,11 +1485,14 @@ function Invoke-NoaulUpdatePlan {
                     Set-NoaulCodexDefaultReasoning -Effort 'xhigh' -DryRun:$DryRun
                 }
             }
+            'cc-switch-cli' {
+                Update-NoaulCcSwitchCli -Component $component -Platform $Platform -DryRun:$DryRun
+            }
             'docker' {
                 $dockerServices += $component.Id
             }
             default {
-                throw "Unsupported update method for $($component.Id): $($component.InstallMethod)"
+                throw "Unsupported update method for $($component.Id): $installMethod"
             }
         }
     }
@@ -1449,7 +1578,8 @@ function Select-NoaulComponentsInteractive {
 function Show-NoaulPlan {
     param(
         [Parameter(Mandatory)][pscustomobject[]] $Plan,
-        [string] $Mode = 'install'
+        [string] $Mode = 'install',
+        [string] $Platform = (Get-NoaulCurrentPlatform)
     )
 
     Write-Host ''
@@ -1460,7 +1590,8 @@ function Show-NoaulPlan {
         Write-Host 'Install/update plan:'
     }
     foreach ($component in @($Plan)) {
-        Write-Host ("  - {0} ({1}) via {2}" -f $component.Name, $component.Id, $component.InstallMethod)
+        $installMethod = Resolve-NoaulComponentInstallMethod -Component $component -Platform $Platform
+        Write-Host ("  - {0} ({1}) via {2}" -f $component.Name, $component.Id, $installMethod)
     }
 }
 
@@ -1473,6 +1604,7 @@ function Start-Noaul {
         [switch] $Update,
         [switch] $ListComponents,
         [string] $InstallRoot = (Get-NoaulDefaultInstallRoot),
+        [string] $Platform = (Get-NoaulCurrentPlatform),
         [switch] $NoLogo
     )
 
@@ -1508,7 +1640,7 @@ function Start-Noaul {
     }
 
     if ($mode -eq 'update') {
-        $plan = @(New-NoaulUpdatePlan -Components $selected.ToArray() -InstallRoot $InstallRoot)
+        $plan = @(New-NoaulUpdatePlan -Components $selected.ToArray() -InstallRoot $InstallRoot -Platform $Platform)
     }
     else {
         $plan = @(New-NoaulInstallPlan -Components $selected.ToArray() -IncludeRecommendedCore:(!$NoPrompt))
@@ -1524,7 +1656,7 @@ function Start-Noaul {
         return
     }
 
-    Show-NoaulPlan -Plan $plan -Mode $mode
+    Show-NoaulPlan -Plan $plan -Mode $mode -Platform $Platform
     if (-not $NoPrompt) {
         if (-not (Read-NoaulYesNo -Prompt 'Proceed with this plan?' -Default:$false)) {
             Write-Host 'Cancelled.'
@@ -1533,10 +1665,10 @@ function Start-Noaul {
     }
 
     if ($mode -eq 'update') {
-        Invoke-NoaulUpdatePlan -Plan $plan -InstallRoot $InstallRoot -DryRun:$DryRun
+        Invoke-NoaulUpdatePlan -Plan $plan -InstallRoot $InstallRoot -Platform $Platform -DryRun:$DryRun
     }
     else {
-        Invoke-NoaulInstallPlan -Plan $plan -InstallRoot $InstallRoot -DryRun:$DryRun
+        Invoke-NoaulInstallPlan -Plan $plan -InstallRoot $InstallRoot -Platform $Platform -DryRun:$DryRun
     }
 }
 

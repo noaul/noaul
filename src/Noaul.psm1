@@ -406,6 +406,40 @@ function New-NoaulInstallPlan {
     $catalog | Where-Object { $selected.ContainsKey($_.Id.ToLowerInvariant()) }
 }
 
+function New-NoaulUpdatePlan {
+    param(
+        [string[]] $Components = @(),
+        [string] $InstallRoot = (Get-NoaulDefaultInstallRoot),
+        [AllowNull()]
+        [string[]] $InstalledComponentIds = $null
+    )
+
+    $catalog = @(Get-NoaulComponentCatalog)
+    $requested = @{}
+    foreach ($componentId in @(ConvertTo-NoaulComponentIds -Components $Components)) {
+        $component = Get-NoaulComponentById -Id $componentId
+        $requested[$component.Id.ToLowerInvariant()] = $true
+    }
+
+    $installed = @{}
+    if ($null -eq $InstalledComponentIds) {
+        foreach ($componentId in @(Get-NoaulInstalledComponentIds -InstallRoot $InstallRoot)) {
+            $installed[$componentId.ToLowerInvariant()] = $true
+        }
+    }
+    else {
+        foreach ($componentId in @(ConvertTo-NoaulComponentIds -Components $InstalledComponentIds)) {
+            $component = Get-NoaulComponentById -Id $componentId
+            $installed[$component.Id.ToLowerInvariant()] = $true
+        }
+    }
+
+    $catalog | Where-Object {
+        $key = $_.Id.ToLowerInvariant()
+        $installed.ContainsKey($key) -and ($requested.Count -eq 0 -or $requested.ContainsKey($key))
+    }
+}
+
 function New-NoaulSecret {
     param([int] $Bytes = 32)
 
@@ -821,6 +855,110 @@ function Test-NoaulComponentCommand {
     Test-NoaulCommand -Name $command
 }
 
+function Test-NoaulScoopPackageInstalled {
+    param([Parameter(Mandatory)][string] $Package)
+
+    Update-NoaulCurrentPath
+    if (-not (Test-NoaulCommand -Name 'scoop')) {
+        return $false
+    }
+
+    & scoop prefix $Package *> $null
+    $LASTEXITCODE -eq 0
+}
+
+function Test-NoaulWingetPackageInstalled {
+    param([Parameter(Mandatory)][string] $Package)
+
+    if (-not (Test-NoaulCommand -Name 'winget')) {
+        return $false
+    }
+
+    & winget list --id $Package --exact *> $null
+    $LASTEXITCODE -eq 0
+}
+
+function Test-NoaulNpmPackageInstalled {
+    param([Parameter(Mandatory)][string] $Package)
+
+    Update-NoaulCurrentPath
+    if (-not (Test-NoaulCommand -Name 'npm')) {
+        return $false
+    }
+
+    & npm list -g $Package --depth=0 *> $null
+    $LASTEXITCODE -eq 0
+}
+
+function Test-NoaulDockerServiceInstalled {
+    param(
+        [Parameter(Mandatory)][string] $Id,
+        [string] $InstallRoot = (Get-NoaulDefaultInstallRoot)
+    )
+
+    switch ($Id) {
+        'cpa' {
+            $composePath = Join-Path $InstallRoot 'services/cpa-stack/docker-compose.yml'
+            return ((Test-Path -LiteralPath $composePath) -and ((Get-Content -LiteralPath $composePath -Raw) -match 'cli-proxy-api'))
+        }
+        'cpa-usage-keeper' {
+            $composePath = Join-Path $InstallRoot 'services/cpa-stack/docker-compose.yml'
+            return ((Test-Path -LiteralPath $composePath) -and ((Get-Content -LiteralPath $composePath -Raw) -match 'cpa-usage-keeper'))
+        }
+        'sub2api' {
+            $composePath = Join-Path $InstallRoot 'services/sub2api/docker-compose.yml'
+            return ((Test-Path -LiteralPath $composePath) -and ((Get-Content -LiteralPath $composePath -Raw) -match 'sub2api'))
+        }
+        default {
+            return $false
+        }
+    }
+}
+
+function Test-NoaulComponentInstalled {
+    param(
+        [Parameter(Mandatory)][pscustomobject] $Component,
+        [string] $InstallRoot = (Get-NoaulDefaultInstallRoot)
+    )
+
+    switch ($Component.InstallMethod) {
+        'detect' {
+            return (Test-NoaulComponentCommand -Component $Component)
+        }
+        'bootstrap-scoop' {
+            return (Test-NoaulComponentCommand -Component $Component)
+        }
+        'scoop' {
+            return (Test-NoaulScoopPackageInstalled -Package ([string] $Component.Package))
+        }
+        'virtual' {
+            return (Test-NoaulComponentCommand -Component $Component)
+        }
+        'winget' {
+            return (Test-NoaulWingetPackageInstalled -Package ([string] $Component.Package))
+        }
+        'npm' {
+            return (Test-NoaulNpmPackageInstalled -Package ([string] $Component.Package))
+        }
+        'docker' {
+            return (Test-NoaulDockerServiceInstalled -Id ([string] $Component.Id) -InstallRoot $InstallRoot)
+        }
+        default {
+            return (Test-NoaulComponentCommand -Component $Component)
+        }
+    }
+}
+
+function Get-NoaulInstalledComponentIds {
+    param([string] $InstallRoot = (Get-NoaulDefaultInstallRoot))
+
+    foreach ($component in @(Get-NoaulComponentCatalog)) {
+        if (Test-NoaulComponentInstalled -Component $component -InstallRoot $InstallRoot) {
+            $component.Id
+        }
+    }
+}
+
 function Assert-NoaulDetectedTool {
     param(
         [Parameter(Mandatory)][pscustomobject] $Component,
@@ -965,6 +1103,23 @@ function Install-NoaulWingetPackage {
     }
 }
 
+function Update-NoaulWingetPackage {
+    param(
+        [Parameter(Mandatory)][pscustomobject] $Component,
+        [switch] $DryRun
+    )
+
+    if (-not (Test-NoaulCommand -Name 'winget')) {
+        throw 'winget was not found. Install App Installer from Microsoft Store or update Windows first.'
+    }
+
+    $id = [string] $Component.Package
+    $name = [string] $Component.Name
+    Invoke-NoaulCommand -Display "winget upgrade $name ($id)" -DryRun:$DryRun -ScriptBlock {
+        & winget upgrade --id $id --exact --silent --accept-package-agreements --accept-source-agreements
+    }
+}
+
 function Install-NoaulNpmPackage {
     param(
         [Parameter(Mandatory)][pscustomobject] $Component,
@@ -981,6 +1136,46 @@ function Install-NoaulNpmPackage {
     Invoke-NoaulCommand -Display "npm install -g $package@latest ($name)" -DryRun:$DryRun -ScriptBlock {
         & npm install -g "$package@latest"
     }
+}
+
+function Update-NoaulScoop {
+    param([switch] $DryRun)
+
+    Update-NoaulCurrentPath
+    if (-not (Test-NoaulCommand -Name 'scoop')) {
+        throw 'scoop was not found. Nothing can be updated through Scoop.'
+    }
+
+    Invoke-NoaulCommand -Display 'scoop update' -DryRun:$DryRun -ScriptBlock {
+        & scoop update
+    }
+}
+
+function Update-NoaulScoopPackage {
+    param(
+        [Parameter(Mandatory)][pscustomobject] $Component,
+        [switch] $DryRun
+    )
+
+    Update-NoaulCurrentPath
+    if (-not (Test-NoaulCommand -Name 'scoop')) {
+        throw 'scoop was not found. Nothing can be updated through Scoop.'
+    }
+
+    $package = [string] $Component.Package
+    $name = [string] $Component.Name
+    Invoke-NoaulCommand -Display "scoop update $package ($name)" -DryRun:$DryRun -ScriptBlock {
+        & scoop update $package
+    }
+}
+
+function Update-NoaulNpmPackage {
+    param(
+        [Parameter(Mandatory)][pscustomobject] $Component,
+        [switch] $DryRun
+    )
+
+    Install-NoaulNpmPackage -Component $Component -DryRun:$DryRun
 }
 
 function Start-NoaulDockerServices {
@@ -1023,6 +1218,54 @@ function Start-NoaulDockerServices {
     }
 
     foreach ($composeDir in $composeDirs) {
+        Push-Location $composeDir
+        try {
+            Invoke-NoaulCommand -Display "docker compose pull in $composeDir" -ScriptBlock { & docker compose pull }
+            Invoke-NoaulCommand -Display "docker compose up -d in $composeDir" -ScriptBlock { & docker compose up -d }
+        }
+        finally {
+            Pop-Location
+        }
+    }
+}
+
+function Update-NoaulDockerServices {
+    param(
+        [Parameter(Mandatory)][string[]] $Services,
+        [string] $InstallRoot = (Get-NoaulDefaultInstallRoot),
+        [switch] $DryRun
+    )
+
+    if ($Services.Count -eq 0) {
+        return
+    }
+
+    if ($DryRun) {
+        foreach ($service in $Services) {
+            Write-Host "[dry-run] update installed Docker service: $service"
+        }
+        Write-Host '[dry-run] docker compose pull'
+        Write-Host '[dry-run] docker compose up -d'
+        return
+    }
+
+    if (-not (Test-NoaulCommand -Name 'docker')) {
+        throw 'docker was not found. Start Docker Desktop first, then rerun Noaul.'
+    }
+
+    $composeDirs = @()
+    if (@($Services | Where-Object { $_ -in @('cpa', 'cpa-usage-keeper') }).Count -gt 0) {
+        $composeDirs += (Join-Path $InstallRoot 'services/cpa-stack')
+    }
+    if ($Services -contains 'sub2api') {
+        $composeDirs += (Join-Path $InstallRoot 'services/sub2api')
+    }
+
+    foreach ($composeDir in @($composeDirs | Select-Object -Unique)) {
+        if (-not (Test-Path -LiteralPath (Join-Path $composeDir 'docker-compose.yml'))) {
+            throw "Docker compose file was not found in $composeDir. Install the service first, then rerun update."
+        }
+
         Push-Location $composeDir
         try {
             Invoke-NoaulCommand -Display "docker compose pull in $composeDir" -ScriptBlock { & docker compose pull }
@@ -1082,6 +1325,54 @@ function Invoke-NoaulInstallPlan {
     }
 }
 
+function Invoke-NoaulUpdatePlan {
+    param(
+        [Parameter(Mandatory)]
+        [pscustomobject[]] $Plan,
+        [string] $InstallRoot = (Get-NoaulDefaultInstallRoot),
+        [switch] $DryRun
+    )
+
+    $dockerServices = @()
+    foreach ($component in @($Plan)) {
+        switch ($component.InstallMethod) {
+            'detect' {
+                Assert-NoaulDetectedTool -Component $component -DryRun:$DryRun
+            }
+            'bootstrap-scoop' {
+                Update-NoaulScoop -DryRun:$DryRun
+            }
+            'scoop' {
+                Update-NoaulScoopPackage -Component $component -DryRun:$DryRun
+                Update-NoaulCurrentPath
+            }
+            'virtual' {
+                Assert-NoaulVirtualComponent -Component $component -DryRun:$DryRun
+            }
+            'winget' {
+                Update-NoaulWingetPackage -Component $component -DryRun:$DryRun
+                Update-NoaulCurrentPath
+            }
+            'npm' {
+                Update-NoaulNpmPackage -Component $component -DryRun:$DryRun
+                if ($component.Id -eq 'codex') {
+                    Set-NoaulCodexDefaultReasoning -Effort 'xhigh' -DryRun:$DryRun
+                }
+            }
+            'docker' {
+                $dockerServices += $component.Id
+            }
+            default {
+                throw "Unsupported update method for $($component.Id): $($component.InstallMethod)"
+            }
+        }
+    }
+
+    if ($dockerServices.Count -gt 0) {
+        Update-NoaulDockerServices -Services $dockerServices -InstallRoot $InstallRoot -DryRun:$DryRun
+    }
+}
+
 function Read-NoaulYesNo {
     param(
         [Parameter(Mandatory)][string] $Prompt,
@@ -1099,6 +1390,21 @@ function Read-NoaulYesNo {
             '^(y|yes)$' { return $true }
             '^(n|no)$' { return $false }
             default { Write-Host 'Please answer y or n.' }
+        }
+    }
+}
+
+function Read-NoaulInstallMode {
+    while ($true) {
+        $answer = Read-Host 'Choose action: install new tools or update installed tools? [i/U]'
+        if ([string]::IsNullOrWhiteSpace($answer)) {
+            return 'update'
+        }
+
+        switch -Regex ($answer.Trim()) {
+            '^(i|install)$' { return 'install' }
+            '^(u|update)$' { return 'update' }
+            default { Write-Host 'Please answer install or update.' }
         }
     }
 }
@@ -1141,10 +1447,18 @@ function Select-NoaulComponentsInteractive {
 }
 
 function Show-NoaulPlan {
-    param([Parameter(Mandatory)][pscustomobject[]] $Plan)
+    param(
+        [Parameter(Mandatory)][pscustomobject[]] $Plan,
+        [string] $Mode = 'install'
+    )
 
     Write-Host ''
-    Write-Host 'Install/update plan:'
+    if ($Mode -eq 'update') {
+        Write-Host 'Update plan:'
+    }
+    else {
+        Write-Host 'Install/update plan:'
+    }
     foreach ($component in @($Plan)) {
         Write-Host ("  - {0} ({1}) via {2}" -f $component.Name, $component.Id, $component.InstallMethod)
     }
@@ -1156,6 +1470,7 @@ function Start-Noaul {
         [string[]] $DockerService = @(),
         [switch] $NoPrompt,
         [switch] $DryRun,
+        [switch] $Update,
         [switch] $ListComponents,
         [string] $InstallRoot = (Get-NoaulDefaultInstallRoot),
         [switch] $NoLogo
@@ -1170,7 +1485,7 @@ function Start-Noaul {
 
     if (-not $NoLogo) {
         Write-Host 'Noaul Windows guided installer'
-        Write-Host 'Only explicitly selected optional tools and Docker services will be installed.'
+        Write-Host 'Choose install to add tools, or update to refresh only tools already installed.'
     }
 
     $selected = New-Object System.Collections.Generic.List[string]
@@ -1181,19 +1496,35 @@ function Start-Noaul {
         $selected.Add($service)
     }
 
+    $mode = if ($Update) { 'update' } else { 'install' }
     if (-not $NoPrompt -and $selected.Count -eq 0) {
+        $mode = Read-NoaulInstallMode
+    }
+
+    if ($mode -eq 'install' -and -not $NoPrompt -and $selected.Count -eq 0) {
         foreach ($item in (Select-NoaulComponentsInteractive)) {
             $selected.Add($item)
         }
     }
 
-    $plan = @(New-NoaulInstallPlan -Components $selected.ToArray() -IncludeRecommendedCore:(!$NoPrompt))
+    if ($mode -eq 'update') {
+        $plan = @(New-NoaulUpdatePlan -Components $selected.ToArray() -InstallRoot $InstallRoot)
+    }
+    else {
+        $plan = @(New-NoaulInstallPlan -Components $selected.ToArray() -IncludeRecommendedCore:(!$NoPrompt))
+    }
+
     if ($plan.Count -eq 0) {
-        Write-Host 'Nothing selected.'
+        if ($mode -eq 'update') {
+            Write-Host 'No installed Noaul components were detected for update.'
+        }
+        else {
+            Write-Host 'Nothing selected.'
+        }
         return
     }
 
-    Show-NoaulPlan -Plan $plan
+    Show-NoaulPlan -Plan $plan -Mode $mode
     if (-not $NoPrompt) {
         if (-not (Read-NoaulYesNo -Prompt 'Proceed with this plan?' -Default:$false)) {
             Write-Host 'Cancelled.'
@@ -1201,13 +1532,20 @@ function Start-Noaul {
         }
     }
 
-    Invoke-NoaulInstallPlan -Plan $plan -InstallRoot $InstallRoot -DryRun:$DryRun
+    if ($mode -eq 'update') {
+        Invoke-NoaulUpdatePlan -Plan $plan -InstallRoot $InstallRoot -DryRun:$DryRun
+    }
+    else {
+        Invoke-NoaulInstallPlan -Plan $plan -InstallRoot $InstallRoot -DryRun:$DryRun
+    }
 }
 
 Export-ModuleMember -Function `
     Get-NoaulComponentCatalog, `
     Get-NoaulDefaultInstallRoot, `
     New-NoaulInstallPlan, `
+    New-NoaulUpdatePlan, `
     New-NoaulDockerServiceFiles, `
     Invoke-NoaulInstallPlan, `
+    Invoke-NoaulUpdatePlan, `
     Start-Noaul

@@ -4,6 +4,7 @@ param(
     [string[]] $DockerService = @(),
     [switch] $NoPrompt,
     [switch] $DryRun,
+    [switch] $Update,
     [switch] $ListComponents,
     [string] $InstallRoot,
     [switch] $NoLogo
@@ -38,6 +39,7 @@ $startArgs = @{
     DockerService = $DockerService
     NoPrompt = $NoPrompt
     DryRun = $DryRun
+    Update = $Update
     ListComponents = $ListComponents
     NoLogo = $NoLogo
 }

@@ -101,6 +101,18 @@ foreach ($defaultComponent in @('winget', 'scoop', 'git', 'curl', 'nodejs', 'npm
     Assert-Contains -Items $defaultPlanIds -Expected $defaultComponent -Message "Recommended install plan should include $defaultComponent"
 }
 
+$updatePlan = New-NoaulUpdatePlan -InstalledComponentIds @('winget', 'scoop', 'git', 'nodejs', 'npm', 'python', 'codex')
+$updatePlanIds = @($updatePlan | ForEach-Object { $_.Id })
+foreach ($installedComponent in @('winget', 'scoop', 'git', 'nodejs', 'npm', 'python', 'codex')) {
+    Assert-Contains -Items $updatePlanIds -Expected $installedComponent -Message "Update plan should include installed component $installedComponent"
+}
+foreach ($missingComponent in @('curl', 'uv', 'pnpm', 'claude-code', 'docker-desktop')) {
+    Assert-True -Condition ($updatePlanIds -notcontains $missingComponent) -Message "Update plan should not include missing component $missingComponent"
+}
+
+$emptyUpdatePlan = @(New-NoaulUpdatePlan -InstalledComponentIds @())
+Assert-True -Condition ($emptyUpdatePlan.Count -eq 0) -Message 'Update plan should be empty when no installed components are detected'
+
 $commaPlan = New-NoaulInstallPlan -Components @('codex,cc-switch') -IncludeRecommendedCore:$false
 $commaPlanIds = @($commaPlan | ForEach-Object { $_.Id })
 Assert-Contains -Items $commaPlanIds -Expected 'codex' -Message 'Comma-separated CLI input should select Codex'

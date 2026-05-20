@@ -13,9 +13,11 @@ param(
 $ErrorActionPreference = 'Stop'
 
 function Resolve-NoaulModulePath {
-    $localModule = Join-Path $PSScriptRoot 'src/Noaul.psm1'
-    if ($PSScriptRoot -and (Test-Path -LiteralPath $localModule)) {
-        return $localModule
+    if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
+        $localModule = Join-Path $PSScriptRoot 'src/Noaul.psm1'
+        if (Test-Path -LiteralPath $localModule) {
+            return $localModule
+        }
     }
 
     $cacheRoot = Join-Path ([System.IO.Path]::GetTempPath()) 'noaul-installer'

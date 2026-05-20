@@ -24,6 +24,35 @@ function Assert-Contains {
     Assert-True -Condition ($Items -contains $Expected) -Message $Message
 }
 
+function Invoke-NoaulWrapperSmoke {
+    $installPath = Join-Path $RepoRoot 'install.ps1'
+    $script = Get-Content -LiteralPath $installPath -Raw
+    $escapedModulePath = $ModulePath.Replace("'", "''")
+    $escapedRepoRoot = $RepoRoot.Replace("'", "''")
+
+    $script = [regex]::Replace(
+        $script,
+        "\s*\`$moduleUrl = 'https://raw\.githubusercontent\.com/noaul/noaul/main/src/Noaul\.psm1'\s*\r?\n\s*Invoke-WebRequest -UseBasicParsing -Uri \`$moduleUrl -OutFile \`$cachedModule",
+        "`r`n    Copy-Item -LiteralPath '$escapedModulePath' -Destination `$cachedModule -Force"
+    )
+    $script = $script.Replace('Start-Noaul @startArgs', 'Write-Output "NOAUL_WRAPPER_SMOKE:$modulePath"')
+
+    $command = @"
+`$ErrorActionPreference = 'Stop'
+Set-Location -LiteralPath '$escapedRepoRoot'
+Invoke-Expression @'
+$script
+'@
+"@
+    $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($command))
+    $output = & pwsh -NoProfile -ExecutionPolicy Bypass -EncodedCommand $encoded
+
+    Assert-True -Condition ($LASTEXITCODE -eq 0) -Message 'install.ps1 should run through Invoke-Expression when $PSScriptRoot is empty'
+    Assert-True -Condition (($output -join "`n") -match 'NOAUL_WRAPPER_SMOKE:.*Noaul\.psm1') -Message 'install.ps1 wrapper smoke should resolve the module path'
+}
+
+Invoke-NoaulWrapperSmoke
+
 Import-Module $ModulePath -Force
 
 $catalog = Get-NoaulComponentCatalog

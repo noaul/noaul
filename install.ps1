@@ -25,7 +25,7 @@ function Resolve-NoaulModulePath {
         New-Item -ItemType Directory -Path $cacheSrc -Force | Out-Null
     }
 
-    $moduleUrl = 'https://raw.githubusercontent.com/uovme/noaul/main/src/Noaul.psm1'
+    $moduleUrl = 'https://raw.githubusercontent.com/noaul/noaul/main/src/Noaul.psm1'
     Invoke-WebRequest -UseBasicParsing -Uri $moduleUrl -OutFile $cachedModule
     return $cachedModule
 }
@@ -47,4 +47,3 @@ if (-not [string]::IsNullOrWhiteSpace($InstallRoot)) {
 }
 
 Start-Noaul @startArgs
-

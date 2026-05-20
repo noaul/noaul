@@ -7,54 +7,224 @@ function Get-NoaulDefaultInstallRoot {
 function Get-NoaulComponentCatalog {
     @(
         [pscustomobject]@{
+            Id = 'winget'
+            Name = 'Windows Package Manager'
+            Category = 'Package Manager'
+            DefaultSelected = $true
+            InstallMethod = 'detect'
+            Package = ''
+            Command = 'winget'
+            Requires = @()
+            Description = 'Windows package manager used for system and GUI tools.'
+        }
+        [pscustomobject]@{
+            Id = 'scoop'
+            Name = 'Scoop'
+            Category = 'Package Manager'
+            DefaultSelected = $true
+            InstallMethod = 'bootstrap-scoop'
+            Package = 'get.scoop.sh'
+            Command = 'scoop'
+            Requires = @()
+            Description = 'CLI-first package manager used by Noaul for developer tools.'
+        }
+        [pscustomobject]@{
             Id = 'git'
             Name = 'Git for Windows'
-            Category = 'Core'
+            Category = 'Core Dev'
             DefaultSelected = $true
-            InstallMethod = 'winget'
-            Package = 'Git.Git'
-            Requires = @()
+            InstallMethod = 'scoop'
+            Package = 'git'
+            Command = 'git'
+            Requires = @('scoop')
             Description = 'Required for most developer workflows.'
+        }
+        [pscustomobject]@{
+            Id = 'curl'
+            Name = 'curl'
+            Category = 'Core Dev'
+            DefaultSelected = $true
+            InstallMethod = 'scoop'
+            Package = 'curl'
+            Command = 'curl.exe'
+            Requires = @('scoop')
+            Description = 'HTTP client used by bootstrap scripts and API workflows.'
+        }
+        [pscustomobject]@{
+            Id = '7zip'
+            Name = '7-Zip'
+            Category = 'Core Dev'
+            DefaultSelected = $true
+            InstallMethod = 'scoop'
+            Package = '7zip'
+            Command = '7z'
+            Requires = @('scoop')
+            Description = 'Archive extraction utility used by many Windows toolchains.'
+        }
+        [pscustomobject]@{
+            Id = 'ripgrep'
+            Name = 'ripgrep'
+            Category = 'Core Dev'
+            DefaultSelected = $true
+            InstallMethod = 'scoop'
+            Package = 'ripgrep'
+            Command = 'rg'
+            Requires = @('scoop')
+            Description = 'Fast code search command.'
+        }
+        [pscustomobject]@{
+            Id = 'fd'
+            Name = 'fd'
+            Category = 'Core Dev'
+            DefaultSelected = $false
+            InstallMethod = 'scoop'
+            Package = 'fd'
+            Command = 'fd'
+            Requires = @('scoop')
+            Description = 'Fast file finder.'
+        }
+        [pscustomobject]@{
+            Id = 'jq'
+            Name = 'jq'
+            Category = 'Core Dev'
+            DefaultSelected = $false
+            InstallMethod = 'scoop'
+            Package = 'jq'
+            Command = 'jq'
+            Requires = @('scoop')
+            Description = 'Command-line JSON processor.'
+        }
+        [pscustomobject]@{
+            Id = 'gh'
+            Name = 'GitHub CLI'
+            Category = 'Core Dev'
+            DefaultSelected = $false
+            InstallMethod = 'scoop'
+            Package = 'gh'
+            Command = 'gh'
+            Requires = @('scoop', 'git')
+            Description = 'GitHub command-line client.'
+        }
+        [pscustomobject]@{
+            Id = 'git-lfs'
+            Name = 'Git LFS'
+            Category = 'Core Dev'
+            DefaultSelected = $false
+            InstallMethod = 'scoop'
+            Package = 'git-lfs'
+            Command = 'git-lfs'
+            Requires = @('scoop', 'git')
+            Description = 'Large file support for Git repositories.'
         }
         [pscustomobject]@{
             Id = 'nodejs'
             Name = 'Node.js LTS'
-            Category = 'Core'
+            Category = 'Runtime'
+            DefaultSelected = $true
+            InstallMethod = 'scoop'
+            Package = 'nodejs-lts'
+            Command = 'node'
+            Requires = @('scoop')
+            Description = 'Required by npm-distributed AI CLIs.'
+        }
+        [pscustomobject]@{
+            Id = 'npm'
+            Name = 'npm'
+            Category = 'Runtime'
+            DefaultSelected = $true
+            InstallMethod = 'virtual'
+            Package = ''
+            Command = 'npm'
+            Requires = @('nodejs')
+            Description = 'Provided by Node.js; verified as a prerequisite for npm tools.'
+        }
+        [pscustomobject]@{
+            Id = 'pnpm'
+            Name = 'pnpm'
+            Category = 'Node Tooling'
+            DefaultSelected = $false
+            InstallMethod = 'scoop'
+            Package = 'pnpm'
+            Command = 'pnpm'
+            Requires = @('scoop', 'nodejs', 'npm')
+            Description = 'Fast Node.js package manager.'
+        }
+        [pscustomobject]@{
+            Id = 'python'
+            Name = 'Python 3'
+            Category = 'Runtime'
+            DefaultSelected = $true
+            InstallMethod = 'scoop'
+            Package = 'python'
+            Command = 'python'
+            Requires = @('scoop')
+            Description = 'Python runtime for automation, scripting, and AI tooling.'
+        }
+        [pscustomobject]@{
+            Id = 'uv'
+            Name = 'uv'
+            Category = 'Python Tooling'
+            DefaultSelected = $true
+            InstallMethod = 'scoop'
+            Package = 'uv'
+            Command = 'uv'
+            Requires = @('scoop', 'python')
+            Description = 'Fast Python package and project manager.'
+        }
+        [pscustomobject]@{
+            Id = 'pipx'
+            Name = 'pipx'
+            Category = 'Python Tooling'
+            DefaultSelected = $false
+            InstallMethod = 'scoop'
+            Package = 'pipx'
+            Command = 'pipx'
+            Requires = @('scoop', 'python')
+            Description = 'Installs Python CLI applications in isolated environments.'
+        }
+        [pscustomobject]@{
+            Id = 'ruff'
+            Name = 'Ruff'
+            Category = 'Python Tooling'
+            DefaultSelected = $false
+            InstallMethod = 'scoop'
+            Package = 'ruff'
+            Command = 'ruff'
+            Requires = @('scoop', 'python')
+            Description = 'Fast Python linter and formatter.'
+        }
+        [pscustomobject]@{
+            Id = 'visual-build-tools'
+            Name = 'Visual Studio Build Tools'
+            Category = 'Build Tools'
             DefaultSelected = $false
             InstallMethod = 'winget'
-            Package = 'OpenJS.NodeJS.LTS'
+            Package = 'Microsoft.VisualStudio.2022.BuildTools'
+            Command = ''
             Requires = @()
-            Description = 'Required by npm-distributed AI CLIs.'
+            Description = 'C++ build tools required by some native npm and Python packages.'
         }
         [pscustomobject]@{
             Id = 'powershell'
             Name = 'PowerShell 7'
-            Category = 'Core'
+            Category = 'Shell'
             DefaultSelected = $false
             InstallMethod = 'winget'
             Package = 'Microsoft.PowerShell'
+            Command = 'pwsh'
             Requires = @()
             Description = 'Modern PowerShell runtime for Windows automation.'
         }
         [pscustomobject]@{
             Id = 'vscode'
             Name = 'Visual Studio Code'
-            Category = 'Core'
+            Category = 'Editor'
             DefaultSelected = $false
             InstallMethod = 'winget'
             Package = 'Microsoft.VisualStudioCode'
+            Command = 'code'
             Requires = @()
             Description = 'Optional editor.'
-        }
-        [pscustomobject]@{
-            Id = 'windows-terminal'
-            Name = 'Windows Terminal'
-            Category = 'Core'
-            DefaultSelected = $false
-            InstallMethod = 'winget'
-            Package = 'Microsoft.WindowsTerminal'
-            Requires = @()
-            Description = 'Optional terminal app.'
         }
         [pscustomobject]@{
             Id = 'docker-desktop'
@@ -63,6 +233,7 @@ function Get-NoaulComponentCatalog {
             DefaultSelected = $false
             InstallMethod = 'winget'
             Package = 'Docker.DockerDesktop'
+            Command = 'docker'
             Requires = @()
             Description = 'Required for optional Docker services.'
         }
@@ -73,7 +244,8 @@ function Get-NoaulComponentCatalog {
             DefaultSelected = $false
             InstallMethod = 'npm'
             Package = '@openai/codex'
-            Requires = @('nodejs')
+            Command = 'codex'
+            Requires = @('nodejs', 'npm')
             Description = 'Optional OpenAI coding CLI. Noaul sets Codex reasoning effort to xhigh.'
         }
         [pscustomobject]@{
@@ -83,7 +255,8 @@ function Get-NoaulComponentCatalog {
             DefaultSelected = $false
             InstallMethod = 'npm'
             Package = '@anthropic-ai/claude-code'
-            Requires = @('nodejs')
+            Command = 'claude'
+            Requires = @('nodejs', 'npm')
             Description = 'Optional Anthropic Claude Code CLI.'
         }
         [pscustomobject]@{
@@ -93,6 +266,7 @@ function Get-NoaulComponentCatalog {
             DefaultSelected = $false
             InstallMethod = 'winget'
             Package = 'Amazon.Kiro'
+            Command = 'kiro'
             Requires = @()
             Description = 'Optional Kiro app from winget.'
         }
@@ -103,7 +277,8 @@ function Get-NoaulComponentCatalog {
             DefaultSelected = $false
             InstallMethod = 'npm'
             Package = 'opencode-ai'
-            Requires = @('nodejs')
+            Command = 'opencode'
+            Requires = @('nodejs', 'npm')
             Description = 'Optional OpenCode CLI.'
         }
         [pscustomobject]@{
@@ -113,6 +288,7 @@ function Get-NoaulComponentCatalog {
             DefaultSelected = $false
             InstallMethod = 'winget'
             Package = 'farion1231.CC-Switch'
+            Command = ''
             Requires = @()
             Description = 'Optional provider/config switcher for AI coding tools.'
         }
@@ -123,6 +299,7 @@ function Get-NoaulComponentCatalog {
             DefaultSelected = $false
             InstallMethod = 'docker'
             Package = 'eceasy/cli-proxy-api:latest'
+            Command = ''
             Requires = @('docker-desktop')
             Description = 'Optional Docker service for CLI proxy API workflows.'
         }
@@ -133,6 +310,7 @@ function Get-NoaulComponentCatalog {
             DefaultSelected = $false
             InstallMethod = 'docker'
             Package = 'ghcr.io/willxup/cpa-usage-keeper:latest'
+            Command = ''
             Requires = @('docker-desktop')
             Description = 'Optional Docker dashboard/service for CPA usage tracking.'
         }
@@ -143,6 +321,7 @@ function Get-NoaulComponentCatalog {
             DefaultSelected = $false
             InstallMethod = 'docker'
             Package = 'weishaw/sub2api:latest'
+            Command = ''
             Requires = @('docker-desktop')
             Description = 'Optional Docker service with PostgreSQL and Redis.'
         }
@@ -614,6 +793,7 @@ function Invoke-NoaulCommand {
 
 function Update-NoaulCurrentPath {
     $paths = @(
+        (Join-Path $HOME 'scoop/shims'),
         (Join-Path $env:ProgramFiles 'Git/cmd'),
         (Join-Path $env:ProgramFiles 'nodejs'),
         (Join-Path $env:APPDATA 'npm')
@@ -624,6 +804,110 @@ function Update-NoaulCurrentPath {
             $env:Path = "$env:Path;$path"
         }
     }
+}
+
+function Test-NoaulComponentCommand {
+    param([Parameter(Mandatory)][pscustomobject] $Component)
+
+    if (-not ($Component.PSObject.Properties.Name -contains 'Command')) {
+        return $false
+    }
+
+    $command = [string] $Component.Command
+    if ([string]::IsNullOrWhiteSpace($command)) {
+        return $false
+    }
+
+    Test-NoaulCommand -Name $command
+}
+
+function Assert-NoaulDetectedTool {
+    param(
+        [Parameter(Mandatory)][pscustomobject] $Component,
+        [switch] $DryRun
+    )
+
+    $name = [string] $Component.Name
+    $command = [string] $Component.Command
+    if ($DryRun) {
+        Write-Host "[dry-run] verify $name command: $command"
+        return
+    }
+
+    Update-NoaulCurrentPath
+    if (-not (Test-NoaulComponentCommand -Component $Component)) {
+        throw "$name was not found. Install or enable $command first, then rerun Noaul."
+    }
+
+    Write-Host "[skip] $name is already available ($command)"
+}
+
+function Install-NoaulScoop {
+    param(
+        [Parameter(Mandatory)][pscustomobject] $Component,
+        [switch] $DryRun
+    )
+
+    Update-NoaulCurrentPath
+    if (Test-NoaulCommand -Name 'scoop') {
+        Write-Host '[skip] Scoop is already available'
+        return
+    }
+
+    if ($DryRun) {
+        Write-Host '[dry-run] install Scoop package manager'
+        return
+    }
+
+    $installCommand = "Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser -Force; irm get.scoop.sh | iex"
+    Invoke-NoaulCommand -Display 'install Scoop package manager from get.scoop.sh' -ScriptBlock {
+        & powershell -NoProfile -ExecutionPolicy Bypass -Command $installCommand
+    }
+    Update-NoaulCurrentPath
+}
+
+function Install-NoaulScoopPackage {
+    param(
+        [Parameter(Mandatory)][pscustomobject] $Component,
+        [switch] $DryRun
+    )
+
+    Update-NoaulCurrentPath
+    if (Test-NoaulComponentCommand -Component $Component) {
+        Write-Host "[skip] $($Component.Name) is already available"
+        return
+    }
+
+    if (-not (Test-NoaulCommand -Name 'scoop')) {
+        throw 'scoop was not found. Install Scoop first, then rerun Noaul.'
+    }
+
+    $package = [string] $Component.Package
+    $name = [string] $Component.Name
+    Invoke-NoaulCommand -Display "scoop install $package ($name)" -DryRun:$DryRun -ScriptBlock {
+        & scoop install $package
+    }
+}
+
+function Assert-NoaulVirtualComponent {
+    param(
+        [Parameter(Mandatory)][pscustomobject] $Component,
+        [switch] $DryRun
+    )
+
+    $name = [string] $Component.Name
+    $command = [string] $Component.Command
+    if ($DryRun) {
+        Write-Host "[dry-run] verify provided tool $name command: $command"
+        return
+    }
+
+    Update-NoaulCurrentPath
+    if (-not (Test-NoaulComponentCommand -Component $Component)) {
+        throw "$name should be provided by its prerequisite, but $command was not found."
+    }
+
+    Write-Host "[ok] $name is available ($command)"
 }
 
 function Set-NoaulCodexDefaultReasoning {
@@ -761,6 +1045,19 @@ function Invoke-NoaulInstallPlan {
     $dockerServices = @()
     foreach ($component in @($Plan)) {
         switch ($component.InstallMethod) {
+            'detect' {
+                Assert-NoaulDetectedTool -Component $component -DryRun:$DryRun
+            }
+            'bootstrap-scoop' {
+                Install-NoaulScoop -Component $component -DryRun:$DryRun
+            }
+            'scoop' {
+                Install-NoaulScoopPackage -Component $component -DryRun:$DryRun
+                Update-NoaulCurrentPath
+            }
+            'virtual' {
+                Assert-NoaulVirtualComponent -Component $component -DryRun:$DryRun
+            }
             'winget' {
                 Install-NoaulWingetPackage -Component $component -DryRun:$DryRun
                 Update-NoaulCurrentPath
@@ -809,7 +1106,20 @@ function Read-NoaulYesNo {
 function Select-NoaulComponentsInteractive {
     $selected = New-Object System.Collections.Generic.List[string]
     $catalog = @(Get-NoaulComponentCatalog)
-    $categories = @('Core', 'Docker Runtime', 'AI CLI', 'AI App', 'Docker Service')
+    $categories = @(
+        'Package Manager',
+        'Core Dev',
+        'Runtime',
+        'Node Tooling',
+        'Python Tooling',
+        'Build Tools',
+        'Shell',
+        'Editor',
+        'Docker Runtime',
+        'AI CLI',
+        'AI App',
+        'Docker Service'
+    )
 
     foreach ($category in $categories) {
         $items = @($catalog | Where-Object { $_.Category -eq $category })

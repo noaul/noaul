@@ -13,6 +13,13 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+try {
+    Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force -ErrorAction SilentlyContinue
+}
+catch {
+    # Process-scope policy is best effort; execution may already be controlled by a higher-precedence policy.
+}
+
 function Resolve-NoaulModulePath {
     if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
         $localModule = Join-Path $PSScriptRoot 'src/Noaul.psm1'

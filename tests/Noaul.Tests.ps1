@@ -118,6 +118,18 @@ Describe 'Component Catalog' {
             $npm.InstallMethod | Should -Be 'virtual'
         }
 
+        It 'winget is bootstrapped instead of only detected' {
+            $winget = $script:Catalog | Where-Object { $_.Id -eq 'winget' } | Select-Object -First 1
+            $winget.InstallMethod | Should -Be 'bootstrap-winget'
+            $winget.DefaultSelected | Should -BeTrue
+        }
+
+        It 'scoop remains default-selected for bootstrap' {
+            $scoop = $script:Catalog | Where-Object { $_.Id -eq 'scoop' } | Select-Object -First 1
+            $scoop.InstallMethod | Should -Be 'bootstrap-scoop'
+            $scoop.DefaultSelected | Should -BeTrue
+        }
+
         It 'cc-switch uses winget on Windows and cc-switch-cli on Linux' {
             $cc = $script:Catalog | Where-Object { $_.Id -eq 'cc-switch' } | Select-Object -First 1
             $cc.InstallMethod | Should -Be 'winget'
@@ -234,6 +246,68 @@ Describe 'Install Plan' {
             $planIds | Should -Contain 'codex'
             $planIds | Should -Contain 'cc-switch'
         }
+    }
+}
+
+Describe 'Prompt Defaults' {
+    BeforeAll {
+        $script:UiSource = Get-Content -LiteralPath (Join-Path $script:RepoRoot 'src/Noaul.UI.psm1') -Raw
+    }
+
+    It 'Shows uppercase Y and N in yes-no prompts' {
+        $script:UiSource | Should -Match "\[Y/N\]"
+        $script:UiSource.Contains('[Y/n]') | Should -BeFalse
+        $script:UiSource.Contains('[y/N]') | Should -BeFalse
+        $script:UiSource | Should -Match 'Please answer Y or N\.'
+    }
+
+    It 'Shows uppercase I and U in install/update prompt' {
+        $script:UiSource | Should -Match '\[I/U\]'
+        $script:UiSource.Contains('[i/U]') | Should -BeFalse
+        $script:UiSource.Contains('[I/u]') | Should -BeFalse
+    }
+
+    It 'Defaults final plan confirmation to yes when Enter is pressed' {
+        $script:UiSource | Should -Match 'Read-NoaulYesNo -Prompt ''Proceed with this plan\?'' -Default:\$true'
+    }
+}
+
+Describe 'Windows Package Manager Bootstrap' {
+    BeforeAll {
+        $script:CatalogSource = Get-Content -LiteralPath (Join-Path $script:RepoRoot 'src/Noaul.Catalog.psm1') -Raw
+        $script:InstallerSource = Get-Content -LiteralPath (Join-Path $script:RepoRoot 'src/Noaul.Installer.psm1') -Raw
+        $script:WrapperSource = Get-Content -LiteralPath (Join-Path $script:RepoRoot 'install.ps1') -Raw
+    }
+
+    It 'Downloads App Installer dependencies when bootstrapping winget' {
+        $script:InstallerSource | Should -Match 'function Install-NoaulWinget'
+        $script:InstallerSource | Should -Match 'Microsoft\.VCLibs\.x64\.14\.00\.Desktop\.appx'
+        $script:InstallerSource | Should -Match 'Microsoft\.UI\.Xaml/2\.8\.6'
+        $script:InstallerSource | Should -Match 'Microsoft\.DesktopAppInstaller_8wekyb3d8bbwe\.msixbundle'
+        $script:InstallerSource | Should -Match 'Add-AppxPackage'
+    }
+
+    It 'Allows Scoop bootstrap from an elevated PowerShell session' {
+        $script:InstallerSource | Should -Match 'Test-NoaulElevated'
+        $script:InstallerSource | Should -Match '-RunAsAdmin'
+    }
+
+    It 'Keeps installing remaining plan items after a component failure' {
+        $script:InstallerSource | Should -Match 'Invoke-NoaulPlanStep'
+        $script:InstallerSource | Should -Match 'Noaul completed with'
+    }
+
+    It 'Runs a post-install health check after install and update plans' {
+        $script:InstallerSource | Should -Match 'function Test-NoaulPlanHealth'
+        $script:InstallerSource | Should -Match 'function Write-NoaulPlanHealthSummary'
+        $script:InstallerSource | Should -Match 'Test-NoaulPlanHealth -Plan \$Plan'
+        $script:InstallerSource | Should -Match 'Post-install check:'
+    }
+
+    It 'Sets process execution policy before importing the downloaded module' {
+        $script:WrapperSource | Should -Match 'Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass'
+        $script:WrapperSource.IndexOf('Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass') |
+            Should -BeLessThan $script:WrapperSource.IndexOf('Import-Module $modulePath -Force')
     }
 }
 

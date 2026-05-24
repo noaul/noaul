@@ -48,7 +48,7 @@ function Get-NoaulComponentCatalog {
             Name = 'Windows Package Manager'
             Category = 'Package Manager'
             DefaultSelected = $true
-            InstallMethod = 'detect'
+            InstallMethod = 'bootstrap-winget'
             LinuxInstallMethod = $null
             Package = ''
             LinuxPackage = $null
@@ -735,6 +735,7 @@ function Invoke-NoaulCommand {
 
     Write-Host "[run] $Display"
     $errorCountBefore = $Error.Count
+    $global:LASTEXITCODE = $null
     & $ScriptBlock
     if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) {
         throw "Command failed (exit code $LASTEXITCODE): $Display"
@@ -840,6 +841,9 @@ function Test-NoaulComponentInstalled {
         'detect' {
             return (Test-NoaulComponentCommand -Component $Component)
         }
+        'bootstrap-winget' {
+            return (Test-NoaulComponentCommand -Component $Component)
+        }
         'bootstrap-scoop' {
             return (Test-NoaulComponentCommand -Component $Component)
         }
@@ -901,6 +905,74 @@ function Assert-NoaulDetectedTool {
     Write-Host "[skip] $name is already available ($command)"
 }
 
+function Test-NoaulElevated {
+    try {
+        $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+        $principal = [System.Security.Principal.WindowsPrincipal]::new($identity)
+        return $principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
+    }
+    catch {
+        return $false
+    }
+}
+
+function Install-NoaulWinget {
+    param(
+        [Parameter(Mandatory)][pscustomobject] $Component,
+        [switch] $DryRun
+    )
+
+    Update-NoaulCurrentPath
+    if (Test-NoaulCommand -Name 'winget') {
+        Write-Host '[skip] Windows Package Manager is already available (winget)'
+        return
+    }
+
+    if ($DryRun) {
+        Write-Host '[dry-run] install Windows Package Manager from Microsoft winget-cli release'
+        return
+    }
+
+    $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) 'noaul-winget-bootstrap'
+    $vclibsPath = Join-Path $tempRoot 'Microsoft.VCLibs.x64.appx'
+    $uiXamlZip = Join-Path $tempRoot 'Microsoft.UI.Xaml.2.8.6.zip'
+    $uiXamlDir = Join-Path $tempRoot 'Microsoft.UI.Xaml.2.8.6'
+    $appInstallerPath = Join-Path $tempRoot 'Microsoft.DesktopAppInstaller.msixbundle'
+
+    Invoke-NoaulCommand -Display 'install Windows Package Manager without Microsoft Store' -ScriptBlock {
+        New-NoaulDirectory -Path $tempRoot | Out-Null
+
+        Invoke-WebRequest -UseBasicParsing -Uri 'https://aka.ms/Microsoft.VCLibs.x64.14.00.Desktop.appx' -OutFile $vclibsPath
+        Invoke-WebRequest -UseBasicParsing -Uri 'https://www.nuget.org/api/v2/package/Microsoft.UI.Xaml/2.8.6' -OutFile $uiXamlZip
+        Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/microsoft/winget-cli/releases/latest/download/Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle' -OutFile $appInstallerPath
+
+        if (Test-Path -LiteralPath $uiXamlDir) {
+            Remove-Item -LiteralPath $uiXamlDir -Recurse -Force
+        }
+        Expand-Archive -LiteralPath $uiXamlZip -DestinationPath $uiXamlDir -Force
+        $uiXamlPackage = Get-ChildItem -LiteralPath (Join-Path $uiXamlDir 'tools\AppX\x64\Release') -Filter '*.appx' |
+            Select-Object -First 1
+        if (-not $uiXamlPackage) {
+            throw 'Microsoft.UI.Xaml appx package was not found after extraction.'
+        }
+
+        Add-AppxPackage -Path $vclibsPath
+        Add-AppxPackage -Path $uiXamlPackage.FullName
+        Add-AppxPackage -Path $appInstallerPath
+    }
+
+    Update-NoaulCurrentPath
+    if (-not (Test-NoaulCommand -Name 'winget')) {
+        $windowsApps = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps'
+        if ((Test-Path -LiteralPath $windowsApps) -and ($env:Path -notlike "*$windowsApps*")) {
+            $env:Path = "$env:Path;$windowsApps"
+        }
+    }
+    if (-not (Test-NoaulCommand -Name 'winget')) {
+        throw 'winget was installed or repaired, but winget was still not found on PATH. Reopen PowerShell and rerun Noaul.'
+    }
+}
+
 function Install-NoaulScoop {
     param(
         [Parameter(Mandatory)][pscustomobject] $Component,
@@ -918,11 +990,19 @@ function Install-NoaulScoop {
         return
     }
 
-    $installCommand = "Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser -Force; irm get.scoop.sh | iex"
+    $installerPath = Join-Path ([System.IO.Path]::GetTempPath()) 'noaul-install-scoop.ps1'
     Invoke-NoaulCommand -Display 'install Scoop package manager from get.scoop.sh' -ScriptBlock {
-        & powershell -NoProfile -ExecutionPolicy Bypass -Command $installCommand
+        Invoke-WebRequest -UseBasicParsing -Uri 'https://get.scoop.sh' -OutFile $installerPath
+        $scoopArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $installerPath)
+        if (Test-NoaulElevated) {
+            $scoopArgs += '-RunAsAdmin'
+        }
+        & powershell @scoopArgs
     }
     Update-NoaulCurrentPath
+    if (-not (Test-NoaulCommand -Name 'scoop')) {
+        throw 'Scoop installer completed, but scoop was still not found on PATH. Reopen PowerShell and rerun Noaul.'
+    }
 }
 
 function Install-NoaulScoopPackage {
@@ -1151,6 +1231,105 @@ function Update-NoaulCcSwitchCli {
     Install-NoaulCcSwitchCli -Component $Component -Platform $Platform -DryRun:$DryRun
 }
 
+function Invoke-NoaulPlanStep {
+    param(
+        [Parameter(Mandatory)][pscustomobject] $Component,
+        [Parameter(Mandatory)][string] $InstallMethod,
+        [Parameter(Mandatory)][string] $Action,
+        [Parameter(Mandatory)][scriptblock] $ScriptBlock
+    )
+
+    try {
+        & $ScriptBlock
+        return $null
+    }
+    catch {
+        $message = $_.Exception.Message
+        Write-Warning ("[{0}] {1} ({2}) failed via {3}: {4}" -f $Action, $Component.Name, $Component.Id, $InstallMethod, $message)
+        return [pscustomobject]@{
+            Id = [string] $Component.Id
+            Name = [string] $Component.Name
+            Method = $InstallMethod
+            Action = $Action
+            Error = $message
+        }
+    }
+}
+
+function Write-NoaulPlanFailureSummary {
+    param([object[]] $Failures = @())
+
+    $failureCount = @($Failures).Count
+    Write-Host ("Noaul completed with {0} failed step(s)." -f $failureCount)
+    foreach ($failure in @($Failures)) {
+        Write-Host ("  - {0} ({1}) via {2}: {3}" -f $failure.Name, $failure.Id, $failure.Method, $failure.Error)
+    }
+}
+
+function Test-NoaulPlanHealth {
+    param(
+        [Parameter(Mandatory)][pscustomobject[]] $Plan,
+        [string] $InstallRoot = (Get-NoaulDefaultInstallRoot),
+        [string] $Platform = (Get-NoaulCurrentPlatform),
+        [switch] $DryRun
+    )
+
+    foreach ($component in @($Plan)) {
+        $installMethod = Resolve-NoaulComponentInstallMethod -Component $component -Platform $Platform
+        if ($DryRun) {
+            [pscustomobject]@{
+                Id = [string] $component.Id
+                Name = [string] $component.Name
+                Method = $installMethod
+                Healthy = $null
+                Status = 'dry-run'
+                Details = 'not checked during dry run'
+            }
+            continue
+        }
+
+        try {
+            $healthy = Test-NoaulComponentInstalled -Component $component -InstallRoot $InstallRoot -Platform $Platform
+            [pscustomobject]@{
+                Id = [string] $component.Id
+                Name = [string] $component.Name
+                Method = $installMethod
+                Healthy = [bool] $healthy
+                Status = if ($healthy) { 'ok' } else { 'failed' }
+                Details = if ($healthy) { 'detected' } else { 'not detected after install/update' }
+            }
+        }
+        catch {
+            [pscustomobject]@{
+                Id = [string] $component.Id
+                Name = [string] $component.Name
+                Method = $installMethod
+                Healthy = $false
+                Status = 'failed'
+                Details = $_.Exception.Message
+            }
+        }
+    }
+}
+
+function Write-NoaulPlanHealthSummary {
+    param([object[]] $Results = @())
+
+    $dryRun = @($Results | Where-Object { $_.Status -eq 'dry-run' })
+    if ($dryRun.Count -eq @($Results).Count) {
+        Write-Host ("[dry-run] Post-install check: {0} component(s) would be checked." -f $dryRun.Count)
+        return
+    }
+
+    $ok = @($Results | Where-Object { $_.Healthy -eq $true })
+    $failed = @($Results | Where-Object { $_.Healthy -eq $false })
+    Write-Host ("Post-install check: {0} OK, {1} failed." -f $ok.Count, $failed.Count)
+
+    foreach ($result in $failed) {
+        Write-Warning ("[check] {0} ({1}) via {2}: {3}" -f $result.Name, $result.Id, $result.Method, $result.Details)
+    }
+}
+
 function Invoke-NoaulInstallPlan {
     param(
         [Parameter(Mandatory)]
@@ -1161,47 +1340,69 @@ function Invoke-NoaulInstallPlan {
     )
 
     $dockerServices = @()
+    $failures = New-Object System.Collections.Generic.List[object]
     foreach ($component in @($Plan)) {
         $installMethod = Resolve-NoaulComponentInstallMethod -Component $component -Platform $Platform
-        switch ($installMethod) {
-            'detect' {
-                Assert-NoaulDetectedTool -Component $component -DryRun:$DryRun
-            }
-            'bootstrap-scoop' {
-                Install-NoaulScoop -Component $component -DryRun:$DryRun
-            }
-            'scoop' {
-                Install-NoaulScoopPackage -Component $component -DryRun:$DryRun
-                Update-NoaulCurrentPath
-            }
-            'virtual' {
-                Assert-NoaulVirtualComponent -Component $component -DryRun:$DryRun
-            }
-            'winget' {
-                Install-NoaulWingetPackage -Component $component -DryRun:$DryRun
-                Update-NoaulCurrentPath
-            }
-            'npm' {
-                Install-NoaulNpmPackage -Component $component -DryRun:$DryRun
-                if ($component.Id -eq 'codex') {
-                    Set-NoaulCodexDefaultReasoning -Effort 'xhigh' -DryRun:$DryRun
+        $failure = Invoke-NoaulPlanStep -Component $component -InstallMethod $installMethod -Action 'install' -ScriptBlock {
+            switch ($installMethod) {
+                'detect' {
+                    Assert-NoaulDetectedTool -Component $component -DryRun:$DryRun
+                }
+                'bootstrap-winget' {
+                    Install-NoaulWinget -Component $component -DryRun:$DryRun
+                }
+                'bootstrap-scoop' {
+                    Install-NoaulScoop -Component $component -DryRun:$DryRun
+                }
+                'scoop' {
+                    Install-NoaulScoopPackage -Component $component -DryRun:$DryRun
+                    Update-NoaulCurrentPath
+                }
+                'virtual' {
+                    Assert-NoaulVirtualComponent -Component $component -DryRun:$DryRun
+                }
+                'winget' {
+                    Install-NoaulWingetPackage -Component $component -DryRun:$DryRun
+                    Update-NoaulCurrentPath
+                }
+                'npm' {
+                    Install-NoaulNpmPackage -Component $component -DryRun:$DryRun
+                    if ($component.Id -eq 'codex') {
+                        Set-NoaulCodexDefaultReasoning -Effort 'xhigh' -DryRun:$DryRun
+                    }
+                }
+                'cc-switch-cli' {
+                    Install-NoaulCcSwitchCli -Component $component -Platform $Platform -DryRun:$DryRun
+                }
+                'docker' {
+                    $dockerServices += $component.Id
+                }
+                default {
+                    throw "Unsupported install method for $($component.Id): $installMethod"
                 }
             }
-            'cc-switch-cli' {
-                Install-NoaulCcSwitchCli -Component $component -Platform $Platform -DryRun:$DryRun
-            }
-            'docker' {
-                $dockerServices += $component.Id
-            }
-            default {
-                throw "Unsupported install method for $($component.Id): $installMethod"
-            }
+        }
+        if ($failure) {
+            $failures.Add($failure)
         }
     }
 
     if ($dockerServices.Count -gt 0) {
-        Start-NoaulDockerServices -Services $dockerServices -InstallRoot $InstallRoot -DryRun:$DryRun
+        $dockerComponent = [pscustomobject]@{
+            Id = 'docker-services'
+            Name = 'Docker services'
+        }
+        $failure = Invoke-NoaulPlanStep -Component $dockerComponent -InstallMethod 'docker' -Action 'install' -ScriptBlock {
+            Start-NoaulDockerServices -Services $dockerServices -InstallRoot $InstallRoot -DryRun:$DryRun
+        }
+        if ($failure) {
+            $failures.Add($failure)
+        }
     }
+
+    Write-NoaulPlanFailureSummary -Failures $failures.ToArray()
+    $health = @(Test-NoaulPlanHealth -Plan $Plan -InstallRoot $InstallRoot -Platform $Platform -DryRun:$DryRun)
+    Write-NoaulPlanHealthSummary -Results $health
 }
 
 function Invoke-NoaulUpdatePlan {
@@ -1214,47 +1415,69 @@ function Invoke-NoaulUpdatePlan {
     )
 
     $dockerServices = @()
+    $failures = New-Object System.Collections.Generic.List[object]
     foreach ($component in @($Plan)) {
         $installMethod = Resolve-NoaulComponentInstallMethod -Component $component -Platform $Platform
-        switch ($installMethod) {
-            'detect' {
-                Assert-NoaulDetectedTool -Component $component -DryRun:$DryRun
-            }
-            'bootstrap-scoop' {
-                Update-NoaulScoop -DryRun:$DryRun
-            }
-            'scoop' {
-                Update-NoaulScoopPackage -Component $component -DryRun:$DryRun
-                Update-NoaulCurrentPath
-            }
-            'virtual' {
-                Assert-NoaulVirtualComponent -Component $component -DryRun:$DryRun
-            }
-            'winget' {
-                Update-NoaulWingetPackage -Component $component -DryRun:$DryRun
-                Update-NoaulCurrentPath
-            }
-            'npm' {
-                Update-NoaulNpmPackage -Component $component -DryRun:$DryRun
-                if ($component.Id -eq 'codex') {
-                    Set-NoaulCodexDefaultReasoning -Effort 'xhigh' -DryRun:$DryRun
+        $failure = Invoke-NoaulPlanStep -Component $component -InstallMethod $installMethod -Action 'update' -ScriptBlock {
+            switch ($installMethod) {
+                'detect' {
+                    Assert-NoaulDetectedTool -Component $component -DryRun:$DryRun
+                }
+                'bootstrap-winget' {
+                    Install-NoaulWinget -Component $component -DryRun:$DryRun
+                }
+                'bootstrap-scoop' {
+                    Update-NoaulScoop -DryRun:$DryRun
+                }
+                'scoop' {
+                    Update-NoaulScoopPackage -Component $component -DryRun:$DryRun
+                    Update-NoaulCurrentPath
+                }
+                'virtual' {
+                    Assert-NoaulVirtualComponent -Component $component -DryRun:$DryRun
+                }
+                'winget' {
+                    Update-NoaulWingetPackage -Component $component -DryRun:$DryRun
+                    Update-NoaulCurrentPath
+                }
+                'npm' {
+                    Update-NoaulNpmPackage -Component $component -DryRun:$DryRun
+                    if ($component.Id -eq 'codex') {
+                        Set-NoaulCodexDefaultReasoning -Effort 'xhigh' -DryRun:$DryRun
+                    }
+                }
+                'cc-switch-cli' {
+                    Update-NoaulCcSwitchCli -Component $component -Platform $Platform -DryRun:$DryRun
+                }
+                'docker' {
+                    $dockerServices += $component.Id
+                }
+                default {
+                    throw "Unsupported update method for $($component.Id): $installMethod"
                 }
             }
-            'cc-switch-cli' {
-                Update-NoaulCcSwitchCli -Component $component -Platform $Platform -DryRun:$DryRun
-            }
-            'docker' {
-                $dockerServices += $component.Id
-            }
-            default {
-                throw "Unsupported update method for $($component.Id): $installMethod"
-            }
+        }
+        if ($failure) {
+            $failures.Add($failure)
         }
     }
 
     if ($dockerServices.Count -gt 0) {
-        Update-NoaulDockerServices -Services $dockerServices -InstallRoot $InstallRoot -DryRun:$DryRun
+        $dockerComponent = [pscustomobject]@{
+            Id = 'docker-services'
+            Name = 'Docker services'
+        }
+        $failure = Invoke-NoaulPlanStep -Component $dockerComponent -InstallMethod 'docker' -Action 'update' -ScriptBlock {
+            Update-NoaulDockerServices -Services $dockerServices -InstallRoot $InstallRoot -DryRun:$DryRun
+        }
+        if ($failure) {
+            $failures.Add($failure)
+        }
     }
+
+    Write-NoaulPlanFailureSummary -Failures $failures.ToArray()
+    $health = @(Test-NoaulPlanHealth -Plan $Plan -InstallRoot $InstallRoot -Platform $Platform -DryRun:$DryRun)
+    Write-NoaulPlanHealthSummary -Results $health
 }
 
 # --- Noaul.Docker.psm1 ---
@@ -1683,7 +1906,7 @@ function Read-NoaulYesNo {
         [bool] $Default = $false
     )
 
-    $suffix = if ($Default) { '[Y/n]' } else { '[y/N]' }
+    $suffix = '[Y/N]'
     while ($true) {
         $answer = Read-Host "$Prompt $suffix"
         if ([string]::IsNullOrWhiteSpace($answer)) {
@@ -1693,14 +1916,14 @@ function Read-NoaulYesNo {
         switch -Regex ($answer.Trim()) {
             '^(y|yes)$' { return $true }
             '^(n|no)$' { return $false }
-            default { Write-Host 'Please answer y or n.' }
+            default { Write-Host 'Please answer Y or N.' }
         }
     }
 }
 
 function Read-NoaulInstallMode {
     while ($true) {
-        $answer = Read-Host 'Choose action: install new tools or update installed tools? [i/U]'
+        $answer = Read-Host 'Choose action: install new tools or update installed tools? [I/U]'
         if ([string]::IsNullOrWhiteSpace($answer)) {
             return 'update'
         }
@@ -1708,7 +1931,7 @@ function Read-NoaulInstallMode {
         switch -Regex ($answer.Trim()) {
             '^(i|install)$' { return 'install' }
             '^(u|update)$' { return 'update' }
-            default { Write-Host 'Please answer install or update.' }
+            default { Write-Host 'Please answer INSTALL or UPDATE.' }
         }
     }
 }
@@ -1833,7 +2056,7 @@ function Start-Noaul {
 
     Show-NoaulPlan -Plan $plan -Mode $mode -Platform $Platform
     if (-not $NoPrompt) {
-        if (-not (Read-NoaulYesNo -Prompt 'Proceed with this plan?' -Default:$false)) {
+        if (-not (Read-NoaulYesNo -Prompt 'Proceed with this plan?' -Default:$true)) {
             Write-Host 'Cancelled.'
             return
         }

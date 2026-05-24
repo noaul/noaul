@@ -6,7 +6,7 @@ function Read-NoaulYesNo {
         [bool] $Default = $false
     )
 
-    $suffix = if ($Default) { '[Y/n]' } else { '[y/N]' }
+    $suffix = '[Y/N]'
     while ($true) {
         $answer = Read-Host "$Prompt $suffix"
         if ([string]::IsNullOrWhiteSpace($answer)) {
@@ -16,14 +16,14 @@ function Read-NoaulYesNo {
         switch -Regex ($answer.Trim()) {
             '^(y|yes)$' { return $true }
             '^(n|no)$' { return $false }
-            default { Write-Host 'Please answer y or n.' }
+            default { Write-Host 'Please answer Y or N.' }
         }
     }
 }
 
 function Read-NoaulInstallMode {
     while ($true) {
-        $answer = Read-Host 'Choose action: install new tools or update installed tools? [i/U]'
+        $answer = Read-Host 'Choose action: install new tools or update installed tools? [I/U]'
         if ([string]::IsNullOrWhiteSpace($answer)) {
             return 'update'
         }
@@ -31,7 +31,7 @@ function Read-NoaulInstallMode {
         switch -Regex ($answer.Trim()) {
             '^(i|install)$' { return 'install' }
             '^(u|update)$' { return 'update' }
-            default { Write-Host 'Please answer install or update.' }
+            default { Write-Host 'Please answer INSTALL or UPDATE.' }
         }
     }
 }
@@ -156,7 +156,7 @@ function Start-Noaul {
 
     Show-NoaulPlan -Plan $plan -Mode $mode -Platform $Platform
     if (-not $NoPrompt) {
-        if (-not (Read-NoaulYesNo -Prompt 'Proceed with this plan?' -Default:$false)) {
+        if (-not (Read-NoaulYesNo -Prompt 'Proceed with this plan?' -Default:$true)) {
             Write-Host 'Cancelled.'
             return
         }

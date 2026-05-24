@@ -47,7 +47,7 @@ function Get-NoaulComponentCatalog {
             Name = 'Windows Package Manager'
             Category = 'Package Manager'
             DefaultSelected = $true
-            InstallMethod = 'detect'
+            InstallMethod = 'bootstrap-winget'
             LinuxInstallMethod = $null
             Package = ''
             LinuxPackage = $null

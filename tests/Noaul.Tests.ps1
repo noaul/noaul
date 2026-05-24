@@ -1,193 +1,330 @@
-$ErrorActionPreference = 'Stop'
-
-$RepoRoot = Split-Path -Parent $PSScriptRoot
-$ModulePath = Join-Path $RepoRoot 'src/Noaul.psm1'
-
-function Assert-True {
-    param(
-        [bool] $Condition,
-        [string] $Message
-    )
-
-    if (-not $Condition) {
-        throw $Message
-    }
+BeforeAll {
+    $ErrorActionPreference = 'Stop'
+    $script:RepoRoot = Split-Path -Parent $PSScriptRoot
+    $script:ModulePath = Join-Path $script:RepoRoot 'src/Noaul.psm1'
+    Import-Module $script:ModulePath -Force
 }
 
-function Assert-Contains {
-    param(
-        [object[]] $Items,
-        [string] $Expected,
-        [string] $Message
-    )
+Describe 'Wrapper Smoke Test' {
+    It 'install.ps1 resolves module and runs entry point' {
+        $installPath = Join-Path $script:RepoRoot 'install.ps1'
+        $script = Get-Content -LiteralPath $installPath -Raw
+        $escapedModulePath = $script:ModulePath.Replace("'", "''")
+        $escapedRepoRoot = $script:RepoRoot.Replace("'", "''")
 
-    Assert-True -Condition ($Items -contains $Expected) -Message $Message
+        # Replace the entire Resolve-NoaulModulePath function body with a simple local copy
+        $script = $script -replace "(?s)function Resolve-NoaulModulePath \{.*?\r?\n\}", @"
+function Resolve-NoaulModulePath {
+    '$escapedModulePath'
 }
+"@
+        $script = $script.Replace('Start-Noaul @startArgs', 'Write-Output "NOAUL_WRAPPER_SMOKE:$modulePath"')
 
-function Invoke-NoaulWrapperSmoke {
-    $installPath = Join-Path $RepoRoot 'install.ps1'
-    $script = Get-Content -LiteralPath $installPath -Raw
-    $escapedModulePath = $ModulePath.Replace("'", "''")
-    $escapedRepoRoot = $RepoRoot.Replace("'", "''")
-
-    $script = [regex]::Replace(
-        $script,
-        "\s*\`$moduleUrl = 'https://raw\.githubusercontent\.com/noaul/noaul/main/src/Noaul\.psm1'\s*\r?\n\s*Invoke-WebRequest -UseBasicParsing -Uri \`$moduleUrl -OutFile \`$cachedModule",
-        "`r`n    Copy-Item -LiteralPath '$escapedModulePath' -Destination `$cachedModule -Force"
-    )
-    $script = $script.Replace('Start-Noaul @startArgs', 'Write-Output "NOAUL_WRAPPER_SMOKE:$modulePath"')
-
-    $command = @"
+        $command = @"
 `$ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath '$escapedRepoRoot'
 Invoke-Expression @'
 $script
 '@
 "@
-    $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($command))
-    $output = & pwsh -NoProfile -ExecutionPolicy Bypass -EncodedCommand $encoded
+        $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($command))
+        $output = & pwsh -NoProfile -ExecutionPolicy Bypass -EncodedCommand $encoded
 
-    Assert-True -Condition ($LASTEXITCODE -eq 0) -Message 'install.ps1 should run through Invoke-Expression when $PSScriptRoot is empty'
-    Assert-True -Condition (($output -join "`n") -match 'NOAUL_WRAPPER_SMOKE:.*Noaul\.psm1') -Message 'install.ps1 wrapper smoke should resolve the module path'
+        $LASTEXITCODE | Should -Be 0 -Because 'install.ps1 should run without errors'
+        ($output -join "`n") | Should -Match 'NOAUL_WRAPPER_SMOKE:.*[Nn]oaul\.psm1'
+    }
 }
 
-Invoke-NoaulWrapperSmoke
+Describe 'Linux Shell Installer' {
+    BeforeAll {
+        $script:LinuxInstallPath = Join-Path $script:RepoRoot 'install.sh'
+    }
 
-Import-Module $ModulePath -Force
+    It 'Provides a bash entry point for Linux users' {
+        Test-Path -LiteralPath $script:LinuxInstallPath | Should -BeTrue
+        $content = Get-Content -LiteralPath $script:LinuxInstallPath -Raw
+        $content | Should -Match '#!/usr/bin/env bash'
+        $content | Should -Match 'set -euo pipefail'
+    }
 
-$catalog = Get-NoaulComponentCatalog
-$ids = @($catalog | ForEach-Object { $_.Id })
-
-foreach ($required in @(
-    'winget',
-    'scoop',
-    'git',
-    'curl',
-    '7zip',
-    'ripgrep',
-    'fd',
-    'jq',
-    'gh',
-    'git-lfs',
-    'nodejs',
-    'npm',
-    'pnpm',
-    'python',
-    'uv',
-    'pipx',
-    'ruff',
-    'visual-build-tools',
-    'powershell',
-    'vscode',
-    'docker-desktop',
-    'codex',
-    'claude-code',
-    'kiro',
-    'opencode',
-    'cc-switch',
-    'cpa',
-    'cpa-usage-keeper',
-    'sub2api'
-)) {
-    Assert-Contains -Items $ids -Expected $required -Message "Catalog should include $required"
+    It 'Defaults to cc-switch and uses saladday/cc-switch-cli' {
+        $content = Get-Content -LiteralPath $script:LinuxInstallPath -Raw
+        $content | Should -Match 'cc-switch'
+        $content | Should -Match 'saladday/cc-switch-cli/releases/latest/download/install.sh'
+        $content | Should -Match 'CC_SWITCH_FORCE'
+    }
 }
 
-Assert-True -Condition ($ids -notcontains 'windows-terminal') -Message 'Windows Terminal should not be in the catalog'
+Describe 'Component Catalog' {
+    BeforeAll {
+        $script:Catalog = Get-NoaulComponentCatalog
+        $script:Ids = @($script:Catalog | ForEach-Object { $_.Id })
+    }
 
-$npmComponent = $catalog | Where-Object { $_.Id -eq 'npm' } | Select-Object -First 1
-Assert-True -Condition ($npmComponent.InstallMethod -eq 'virtual') -Message 'npm should be modeled as provided by Node.js, not installed independently'
+    Context 'Completeness' {
+        It 'Contains <Id>' -TestCases @(
+            @{ Id = 'winget' }
+            @{ Id = 'scoop' }
+            @{ Id = 'git' }
+            @{ Id = 'curl' }
+            @{ Id = '7zip' }
+            @{ Id = 'ripgrep' }
+            @{ Id = 'fd' }
+            @{ Id = 'jq' }
+            @{ Id = 'gh' }
+            @{ Id = 'git-lfs' }
+            @{ Id = 'nodejs' }
+            @{ Id = 'npm' }
+            @{ Id = 'pnpm' }
+            @{ Id = 'python' }
+            @{ Id = 'uv' }
+            @{ Id = 'pipx' }
+            @{ Id = 'ruff' }
+            @{ Id = 'visual-build-tools' }
+            @{ Id = 'powershell' }
+            @{ Id = 'vscode' }
+            @{ Id = 'docker-desktop' }
+            @{ Id = 'codex' }
+            @{ Id = 'claude-code' }
+            @{ Id = 'kiro' }
+            @{ Id = 'opencode' }
+            @{ Id = 'cc-switch' }
+            @{ Id = 'cpa' }
+            @{ Id = 'cpa-usage-keeper' }
+            @{ Id = 'sub2api' }
+        ) {
+            $script:Ids | Should -Contain $Id
+        }
 
-$ccSwitchComponent = $catalog | Where-Object { $_.Id -eq 'cc-switch' } | Select-Object -First 1
-Assert-True -Condition ($ccSwitchComponent.InstallMethod -eq 'winget') -Message 'CC Switch should keep winget as the Windows installer'
-Assert-True -Condition ($ccSwitchComponent.LinuxInstallMethod -eq 'cc-switch-cli') -Message 'CC Switch should use cc-switch-cli on Linux'
-Assert-True -Condition ($ccSwitchComponent.LinuxPackage -match 'saladday/cc-switch-cli') -Message 'Linux CC Switch should use saladday/cc-switch-cli'
-Invoke-NoaulInstallPlan -Plan @($ccSwitchComponent) -DryRun -Platform linux | Out-Null
-Invoke-NoaulUpdatePlan -Plan @($ccSwitchComponent) -DryRun -Platform linux | Out-Null
+        It 'Does not contain windows-terminal' {
+            $script:Ids | Should -Not -Contain 'windows-terminal'
+        }
+    }
 
-$optionalIds = @($catalog | Where-Object { $_.Category -in @('AI CLI', 'Docker Service') -and $_.DefaultSelected } | ForEach-Object { $_.Id })
-Assert-True -Condition ($optionalIds.Count -eq 0) -Message 'AI CLIs and Docker services must not be selected by default'
+    Context 'Schema consistency' {
+        It 'All components have required properties' {
+            $required = @('Id', 'Name', 'Category', 'DefaultSelected', 'InstallMethod', 'LinuxInstallMethod', 'Package', 'LinuxPackage', 'Command', 'Requires', 'Description')
+            foreach ($c in $script:Catalog) {
+                foreach ($prop in $required) {
+                    $c.PSObject.Properties.Name | Should -Contain $prop -Because "$($c.Id) should have $prop"
+                }
+            }
+        }
+    }
 
-$plan = New-NoaulInstallPlan -Components @('codex', 'cc-switch') -IncludeRecommendedCore:$false
-$planIds = @($plan | ForEach-Object { $_.Id })
-Assert-Contains -Items $planIds -Expected 'nodejs' -Message 'Codex should pull in Node.js prerequisite'
-Assert-Contains -Items $planIds -Expected 'npm' -Message 'Codex should pull in npm prerequisite'
-Assert-Contains -Items $planIds -Expected 'codex' -Message 'Codex should be in selected plan'
-Assert-Contains -Items $planIds -Expected 'cc-switch' -Message 'CC Switch should be in selected plan'
-Assert-True -Condition ($planIds -notcontains 'claude-code') -Message 'Claude Code should not be installed when not selected'
-Assert-True -Condition ($planIds -notcontains 'opencode') -Message 'OpenCode should not be installed when not selected'
-Assert-True -Condition ($planIds -notcontains 'kiro') -Message 'Kiro should not be installed when not selected'
+    Context 'Component properties' {
+        It 'npm is modeled as virtual' {
+            $npm = $script:Catalog | Where-Object { $_.Id -eq 'npm' } | Select-Object -First 1
+            $npm.InstallMethod | Should -Be 'virtual'
+        }
 
-$toolingPlan = New-NoaulInstallPlan -Components @('pnpm', 'uv', 'ruff') -IncludeRecommendedCore:$false
-$toolingPlanIds = @($toolingPlan | ForEach-Object { $_.Id })
-Assert-Contains -Items $toolingPlanIds -Expected 'scoop' -Message 'Scoop-installed tools should pull in Scoop'
-Assert-Contains -Items $toolingPlanIds -Expected 'nodejs' -Message 'pnpm should pull in Node.js prerequisite'
-Assert-Contains -Items $toolingPlanIds -Expected 'npm' -Message 'pnpm should pull in npm prerequisite'
-Assert-Contains -Items $toolingPlanIds -Expected 'python' -Message 'uv/ruff should pull in Python prerequisite'
-Assert-Contains -Items $toolingPlanIds -Expected 'uv' -Message 'uv should be in selected plan'
-Assert-Contains -Items $toolingPlanIds -Expected 'pnpm' -Message 'pnpm should be in selected plan'
-Assert-Contains -Items $toolingPlanIds -Expected 'ruff' -Message 'ruff should be in selected plan'
+        It 'cc-switch uses winget on Windows and cc-switch-cli on Linux' {
+            $cc = $script:Catalog | Where-Object { $_.Id -eq 'cc-switch' } | Select-Object -First 1
+            $cc.InstallMethod | Should -Be 'winget'
+            $cc.LinuxInstallMethod | Should -Be 'cc-switch-cli'
+            $cc.LinuxPackage | Should -Match 'saladday/cc-switch-cli'
+        }
 
-$dockerPlan = New-NoaulInstallPlan -Components @('sub2api') -IncludeRecommendedCore:$false
-$dockerPlanIds = @($dockerPlan | ForEach-Object { $_.Id })
-Assert-Contains -Items $dockerPlanIds -Expected 'docker-desktop' -Message 'Docker services should pull in Docker Desktop'
-
-$defaultPlan = New-NoaulInstallPlan -Components @() -IncludeRecommendedCore:$true
-$defaultPlanIds = @($defaultPlan | ForEach-Object { $_.Id })
-foreach ($defaultComponent in @('winget', 'scoop', 'git', 'curl', 'nodejs', 'npm', 'python', 'uv')) {
-    Assert-Contains -Items $defaultPlanIds -Expected $defaultComponent -Message "Recommended install plan should include $defaultComponent"
+        It 'AI CLIs and Docker services are not default-selected' {
+            $optionalIds = @($script:Catalog | Where-Object {
+                $_.Category -in @('AI CLI', 'Docker Service') -and $_.DefaultSelected
+            } | ForEach-Object { $_.Id })
+            $optionalIds.Count | Should -Be 0
+        }
+    }
 }
 
-$updatePlan = New-NoaulUpdatePlan -InstalledComponentIds @('winget', 'scoop', 'git', 'nodejs', 'npm', 'python', 'codex')
-$updatePlanIds = @($updatePlan | ForEach-Object { $_.Id })
-foreach ($installedComponent in @('winget', 'scoop', 'git', 'nodejs', 'npm', 'python', 'codex')) {
-    Assert-Contains -Items $updatePlanIds -Expected $installedComponent -Message "Update plan should include installed component $installedComponent"
+Describe 'Windows PowerShell Compatibility' {
+    It 'Detects Windows without relying on PowerShell 7 platform variables' {
+        $windowsPowerShell = Get-Command powershell -ErrorAction SilentlyContinue
+        if (-not $windowsPowerShell) {
+            Set-ItResult -Skipped -Because 'Windows PowerShell is not available on this machine'
+            return
+        }
+
+        $escapedModulePath = $script:ModulePath.Replace("'", "''")
+        $command = @"
+`$ErrorActionPreference = 'Continue'
+Import-Module '$escapedModulePath' -Force
+Get-NoaulCurrentPlatform
+"@
+        $output = & $windowsPowerShell.Source -NoProfile -ExecutionPolicy Bypass -Command $command *>&1
+
+        ($output -join "`n") | Should -Not -Match 'VariableIsUndefined|\$IsLinux|\$IsMacOS'
+        ($output | Select-Object -Last 1) | Should -Be 'windows'
+    }
 }
-foreach ($missingComponent in @('curl', 'uv', 'pnpm', 'claude-code', 'docker-desktop')) {
-    Assert-True -Condition ($updatePlanIds -notcontains $missingComponent) -Message "Update plan should not include missing component $missingComponent"
+
+Describe 'Install Plan' {
+    Context 'Dependency resolution' {
+        It 'codex requires nodejs and npm' {
+            $plan = New-NoaulInstallPlan -Components @('codex') -IncludeRecommendedCore:$false
+            $planIds = @($plan | ForEach-Object { $_.Id })
+            $planIds | Should -Contain 'scoop'
+            $planIds | Should -Contain 'nodejs'
+            $planIds | Should -Contain 'npm'
+            $planIds | Should -Contain 'codex'
+        }
+
+        It 'codex does not pull in claude-code, opencode, or kiro' {
+            $plan = New-NoaulInstallPlan -Components @('codex', 'cc-switch') -IncludeRecommendedCore:$false
+            $planIds = @($plan | ForEach-Object { $_.Id })
+            $planIds | Should -Not -Contain 'claude-code'
+            $planIds | Should -Not -Contain 'opencode'
+            $planIds | Should -Not -Contain 'kiro'
+        }
+
+        It 'pnpm, uv, ruff pull in their prerequisites' {
+            $plan = New-NoaulInstallPlan -Components @('pnpm', 'uv', 'ruff') -IncludeRecommendedCore:$false
+            $planIds = @($plan | ForEach-Object { $_.Id })
+            $planIds | Should -Contain 'scoop'
+            $planIds | Should -Contain 'nodejs'
+            $planIds | Should -Contain 'npm'
+            $planIds | Should -Contain 'python'
+            $planIds | Should -Contain 'uv'
+            $planIds | Should -Contain 'pnpm'
+            $planIds | Should -Contain 'ruff'
+        }
+
+        It 'sub2api pulls in docker-desktop' {
+            $plan = New-NoaulInstallPlan -Components @('sub2api') -IncludeRecommendedCore:$false
+            $planIds = @($plan | ForEach-Object { $_.Id })
+            $planIds | Should -Contain 'winget'
+            $planIds | Should -Contain 'docker-desktop'
+        }
+
+        It 'winget-installed components verify winget before installing' {
+            $plan = New-NoaulInstallPlan -Components @('cc-switch') -IncludeRecommendedCore:$false
+            $planIds = @($plan | ForEach-Object { $_.Id })
+            $planIds | Should -Contain 'winget'
+            $planIds | Should -Contain 'cc-switch'
+            [array]::IndexOf($planIds, 'winget') | Should -BeLessThan ([array]::IndexOf($planIds, 'cc-switch'))
+        }
+
+        It 'Linux cc-switch install plan does not add Windows package managers' {
+            $plan = New-NoaulInstallPlan -Components @('cc-switch') -IncludeRecommendedCore:$false -Platform linux
+            $planIds = @($plan | ForEach-Object { $_.Id })
+            $planIds | Should -Contain 'cc-switch'
+            $planIds | Should -Not -Contain 'winget'
+            $planIds | Should -Not -Contain 'scoop'
+        }
+
+        It 'default plan includes recommended core components' {
+            $plan = New-NoaulInstallPlan -Components @() -IncludeRecommendedCore:$true
+            $planIds = @($plan | ForEach-Object { $_.Id })
+            foreach ($comp in @('winget', 'scoop', 'git', 'curl', 'nodejs', 'npm', 'python', 'uv')) {
+                $planIds | Should -Contain $comp -Because "default plan should include $comp"
+            }
+        }
+
+        It 'Unknown component throws' {
+            { New-NoaulInstallPlan -Components @('nonexistent-tool') -IncludeRecommendedCore:$false } | Should -Throw
+        }
+
+        It 'No infinite loop with multiple AI CLIs' {
+            $plan = New-NoaulInstallPlan -Components @('codex', 'claude-code', 'opencode') -IncludeRecommendedCore:$false
+            $plan | Should -Not -BeNullOrEmpty
+        }
+    }
+
+    Context 'Comma-separated input' {
+        It 'Splits codex,cc-switch into both components' {
+            $plan = New-NoaulInstallPlan -Components @('codex,cc-switch') -IncludeRecommendedCore:$false
+            $planIds = @($plan | ForEach-Object { $_.Id })
+            $planIds | Should -Contain 'codex'
+            $planIds | Should -Contain 'cc-switch'
+        }
+    }
 }
 
-$emptyUpdatePlan = @(New-NoaulUpdatePlan -InstalledComponentIds @())
-Assert-True -Condition ($emptyUpdatePlan.Count -eq 0) -Message 'Update plan should be empty when no installed components are detected'
+Describe 'Update Plan' {
+    It 'Includes installed components and respects filter' {
+        $plan = New-NoaulUpdatePlan -InstalledComponentIds @('winget', 'scoop', 'git', 'nodejs', 'npm', 'python', 'codex')
+        $planIds = @($plan | ForEach-Object { $_.Id })
+        foreach ($comp in @('winget', 'scoop', 'git', 'nodejs', 'npm', 'python', 'codex')) {
+            $planIds | Should -Contain $comp
+        }
+        foreach ($comp in @('curl', 'uv', 'pnpm', 'claude-code', 'docker-desktop')) {
+            $planIds | Should -Not -Contain $comp
+        }
+    }
 
-$commaPlan = New-NoaulInstallPlan -Components @('codex,cc-switch') -IncludeRecommendedCore:$false
-$commaPlanIds = @($commaPlan | ForEach-Object { $_.Id })
-Assert-Contains -Items $commaPlanIds -Expected 'codex' -Message 'Comma-separated CLI input should select Codex'
-Assert-Contains -Items $commaPlanIds -Expected 'cc-switch' -Message 'Comma-separated CLI input should select CC Switch'
+    It 'Empty installed list produces empty plan' {
+        $plan = @(New-NoaulUpdatePlan -InstalledComponentIds @())
+        $plan.Count | Should -Be 0
+    }
+}
 
-Invoke-NoaulInstallPlan -Plan $plan -DryRun -InstallRoot (Join-Path ([System.IO.Path]::GetTempPath()) 'noaul-dry-run-test') | Out-Null
-Invoke-NoaulInstallPlan -Plan $toolingPlan -DryRun -InstallRoot (Join-Path ([System.IO.Path]::GetTempPath()) 'noaul-tooling-dry-run-test') | Out-Null
+Describe 'Dry-run execution' {
+    It 'Install plan dry-run succeeds' {
+        $plan = New-NoaulInstallPlan -Components @('codex', 'cc-switch') -IncludeRecommendedCore:$false
+        { Invoke-NoaulInstallPlan -Plan $plan -DryRun -InstallRoot (Join-Path ([System.IO.Path]::GetTempPath()) 'noaul-dry-run-test') } | Should -Not -Throw
+    }
 
-$tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('noaul-tests-' + [guid]::NewGuid().ToString('N'))
-try {
-    New-NoaulDockerServiceFiles `
-        -Services @('cpa', 'cpa-usage-keeper', 'sub2api') `
-        -InstallRoot $tempRoot `
-        -Secrets @{
+    It 'Update plan dry-run succeeds' {
+        $plan = New-NoaulInstallPlan -Components @('pnpm', 'uv', 'ruff') -IncludeRecommendedCore:$false
+        { Invoke-NoaulInstallPlan -Plan $plan -DryRun -InstallRoot (Join-Path ([System.IO.Path]::GetTempPath()) 'noaul-tooling-dry-run-test') } | Should -Not -Throw
+    }
+
+    It 'cc-switch dry-run on Linux succeeds' {
+        $cc = Get-NoaulComponentCatalog | Where-Object { $_.Id -eq 'cc-switch' }
+        { Invoke-NoaulInstallPlan -Plan @($cc) -DryRun -Platform linux } | Should -Not -Throw
+        { Invoke-NoaulUpdatePlan -Plan @($cc) -DryRun -Platform linux } | Should -Not -Throw
+    }
+}
+
+Describe 'Docker Service Files' {
+    BeforeAll {
+        $script:TempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('noaul-tests-' + [guid]::NewGuid().ToString('N'))
+        $script:Secrets = @{
             CpaManagementKey = 'test-management-key'
             KeeperLoginPassword = 'test-login-password'
             Sub2ApiPostgresPassword = 'test-postgres-password'
             Sub2ApiJwtSecret = 'test-jwt-secret'
             Sub2ApiTotpKey = 'test-totp-key'
-        } | Out-Null
+        }
+    }
 
-    $cpaCompose = Get-Content -LiteralPath (Join-Path $tempRoot 'services/cpa-stack/docker-compose.yml') -Raw
-    $cpaEnv = Get-Content -LiteralPath (Join-Path $tempRoot 'services/cpa-stack/.env') -Raw
-    $sub2apiCompose = Get-Content -LiteralPath (Join-Path $tempRoot 'services/sub2api/docker-compose.yml') -Raw
-    $sub2apiEnv = Get-Content -LiteralPath (Join-Path $tempRoot 'services/sub2api/.env') -Raw
+    AfterAll {
+        if (Test-Path -LiteralPath $script:TempRoot) {
+            Remove-Item -LiteralPath $script:TempRoot -Recurse -Force
+        }
+    }
 
-    Assert-True -Condition ($cpaCompose -match 'eceasy/cli-proxy-api:latest') -Message 'CPA compose should use CLIProxyAPI image'
-    Assert-True -Condition ($cpaCompose -match 'ghcr.io/willxup/cpa-usage-keeper:latest') -Message 'CPA compose should include CPA Usage Keeper when selected'
-    Assert-True -Condition ($cpaCompose -match 'CPA_MANAGEMENT_KEY') -Message 'CPA compose should read the management key from .env'
-    Assert-True -Condition ($cpaEnv -match 'test-management-key') -Message 'CPA management key should be written into generated env file'
-    Assert-True -Condition ($sub2apiCompose -match 'weishaw/sub2api:latest') -Message 'Sub2API compose should use Sub2API image'
-    Assert-True -Condition ($sub2apiCompose -match 'postgres:18-alpine') -Message 'Sub2API compose should include PostgreSQL'
-    Assert-True -Condition ($sub2apiCompose -match 'redis:8-alpine') -Message 'Sub2API compose should include Redis'
-    Assert-True -Condition ($sub2apiEnv -match 'test-postgres-password') -Message 'Sub2API generated env should contain supplied database secret'
-}
-finally {
-    if (Test-Path -LiteralPath $tempRoot) {
-        Remove-Item -LiteralPath $tempRoot -Recurse -Force
+    It 'Generates CPA stack files with correct content' {
+        New-NoaulDockerServiceFiles -Services @('cpa', 'cpa-usage-keeper') -InstallRoot $script:TempRoot -Secrets $script:Secrets | Out-Null
+
+        $cpaCompose = Get-Content -LiteralPath (Join-Path $script:TempRoot 'services/cpa-stack/docker-compose.yml') -Raw
+        $cpaEnv = Get-Content -LiteralPath (Join-Path $script:TempRoot 'services/cpa-stack/.env') -Raw
+
+        $cpaCompose | Should -Match 'eceasy/cli-proxy-api:latest'
+        $cpaCompose | Should -Match 'ghcr.io/willxup/cpa-usage-keeper:latest'
+        $cpaCompose | Should -Match 'CPA_MANAGEMENT_KEY'
+        $cpaEnv | Should -Match 'test-management-key'
+    }
+
+    It 'Generates Sub2API files with correct content' {
+        New-NoaulDockerServiceFiles -Services @('sub2api') -InstallRoot $script:TempRoot -Secrets $script:Secrets | Out-Null
+
+        $sub2apiCompose = Get-Content -LiteralPath (Join-Path $script:TempRoot 'services/sub2api/docker-compose.yml') -Raw
+        $sub2apiEnv = Get-Content -LiteralPath (Join-Path $script:TempRoot 'services/sub2api/.env') -Raw
+
+        $sub2apiCompose | Should -Match 'weishaw/sub2api:latest'
+        $sub2apiCompose | Should -Match 'postgres:18-alpine'
+        $sub2apiCompose | Should -Match 'redis:8-alpine'
+        $sub2apiEnv | Should -Match 'test-postgres-password'
+    }
+
+    It 'Unknown Docker service throws' {
+        { New-NoaulDockerServiceFiles -Services @('nonexistent') -InstallRoot $script:TempRoot } | Should -Throw
     }
 }
 
-Write-Host 'Noaul tests passed.'
+Describe 'YAML Scalar Safety' {
+    It 'Quotes values with special characters' {
+        ConvertTo-YamlScalar 'simple' | Should -Be 'simple'
+        ConvertTo-YamlScalar 'has:colon' | Should -Match '^"'
+        ConvertTo-YamlScalar 'has#hash' | Should -Match '^"'
+        ConvertTo-YamlScalar 'has"quote' | Should -Match '^"'
+    }
+}

@@ -29,8 +29,12 @@ function Resolve-NoaulModulePath {
         New-Item -ItemType Directory -Path $cacheSrc -Force | Out-Null
     }
 
-    $moduleUrl = 'https://raw.githubusercontent.com/noaul/noaul/main/src/Noaul.psm1'
-    Invoke-WebRequest -UseBasicParsing -Uri $moduleUrl -OutFile $cachedModule
+    $moduleUrl = 'https://raw.githubusercontent.com/noaul/noaul/main/dist/Noaul.psm1'
+    try {
+        Invoke-WebRequest -UseBasicParsing -Uri $moduleUrl -OutFile $cachedModule
+    } catch {
+        throw "Failed to download Noaul module from $moduleUrl. Check network connectivity. $_"
+    }
     return $cachedModule
 }
 
